@@ -1,0 +1,1496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body style="margin:0">
+<title>ATX HubSort</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: full-bleed 3D hub floor; HMI panels docked to the screen edges like a hub control-room screen.
+   Single dark theme on purpose: it mimics a plant HMI. Route colors are shared by packages, chutes, doors, trucks and counters. */
+:root {
+  color-scheme: dark;
+  --floor: #12171c;
+  --panel: rgba(20, 26, 33, 0.9);
+  --line: #2b3540;
+  --fg: #e1e7ec;
+  --muted: #8d9aa6;
+  --safety: #f2b630;
+  --run: #3fbf6f;
+  --fault: #e5484d;
+  --info: #4a9fe0;
+  --cloud: #6cc4ff;
+  --ink-on-safety: #1a1405;
+  --font-display: "Barlow Condensed", "Arial Narrow", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+html, body { height: 100%; }
+body { background: var(--floor); color: var(--fg); font-family: var(--font-body); font-size: 14px; overflow: hidden; }
+#scene { position: fixed; inset: 0; }
+#scene canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.fallback { padding: 140px 24px; color: var(--muted); max-width: 520px; }
+
+.hud { position: fixed; left: 0; right: 0; z-index: 4; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); pointer-events: none; display: flex; gap: 12px; }
+.hud > * { pointer-events: auto; }
+.hud.top { top: 0; padding-top: calc(12px + env(safe-area-inset-top, 0px)); justify-content: space-between; align-items: flex-start; flex-wrap: wrap; }
+.hud.bottom { bottom: 0; padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.title-card { padding: 10px 14px 11px; min-width: 0; max-width: min(100%, 400px); }
+.eyebrow { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; color: var(--safety); text-transform: uppercase; }
+h1 { margin: 2px 0 0; font-family: var(--font-display); font-weight: 700; font-size: 30px; line-height: 1; letter-spacing: 0.01em; text-transform: uppercase; text-wrap: balance; }
+.spec { margin-top: 4px; color: var(--muted); font-size: 12px; font-family: var(--font-mono); }
+.bar { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; max-width: 100%; min-width: 0; }
+.cams { display: flex; gap: 4px; overflow-x: auto; max-width: 100%; padding: 5px; scrollbar-width: none; align-items: center; }
+.cams::-webkit-scrollbar { display: none; }
+.cams .sep { width: 1px; align-self: stretch; background: var(--line); margin: 2px 4px; flex: none; }
+.chip { font-family: var(--font-display); font-weight: 600; font-size: 14.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 4px; padding: 4px 8px; white-space: nowrap; cursor: pointer; }
+.chip:hover { color: var(--fg); }
+.chip[aria-pressed="true"] { color: var(--ink-on-safety); background: var(--safety); }
+.lens .chip[aria-pressed="true"][data-lens="plc"] { background: var(--safety); }
+.lens .chip[aria-pressed="true"][data-lens="cloud"] { background: var(--cloud); color: #04121d; }
+.lens .chip[aria-pressed="true"][data-lens="all"] { background: var(--fg); color: #11161b; }
+.lens-label { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; padding: 0 4px 0 6px; white-space: nowrap; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--safety); outline-offset: 2px; }
+
+/* left: last scan / component info */
+.leftcol { max-height: var(--panel-max, 50%); overflow: auto; position: fixed; z-index: 3; left: max(16px, env(safe-area-inset-left, 0px)); top: var(--panel-top, 120px); width: 292px; max-width: calc(100% - 32px); display: flex; flex-direction: column; gap: 10px; }
+.pane { padding: 10px 12px 12px; }
+.pane h2 { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 18px; letter-spacing: 0.06em; text-transform: uppercase; display: flex; align-items: center; gap: 8px; }
+.pane .sub { margin: 1px 0 8px; color: var(--muted); font-size: 12px; }
+.badge { font-family: var(--font-mono); font-size: 11px; font-weight: 500; padding: 1px 6px; border-radius: 3px; border: 1px solid currentColor; letter-spacing: 0.02em; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-family: var(--font-mono); font-size: 12px; margin: 0; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ok { color: var(--run); }
+.bad { color: var(--fault); }
+.routechip { display: inline-flex; align-items: center; gap: 6px; }
+.routechip i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: var(--c); }
+.decision { margin-top: 9px; padding: 7px 9px 6px; border-radius: 4px; border-left: 5px solid var(--c, var(--muted)); background: rgba(255,255,255,0.04); font-family: var(--font-display); font-weight: 700; font-size: 19px; letter-spacing: 0.04em; text-transform: uppercase; }
+.decision small { display: block; font-family: var(--font-mono); font-weight: 400; font-size: 11px; letter-spacing: 0; text-transform: none; color: var(--muted); }
+.info .close { margin-left: auto; background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 4px; font-family: var(--font-mono); font-size: 11px; padding: 2px 7px; cursor: pointer; }
+.info p { margin: 0 0 8px; font-size: 13px; line-height: 1.45; color: var(--fg); }
+.info h3 { margin: 10px 0 4px; font-family: var(--font-mono); font-size: 10.5px; font-weight: 500; color: var(--safety); letter-spacing: 0.08em; text-transform: uppercase; }
+.jobs { display: flex; flex-wrap: wrap; gap: 5px; }
+.job { font-size: 11.5px; padding: 2px 7px; border-radius: 3px; background: rgba(255,255,255,0.06); border: 1px solid var(--line); }
+.job.plc { border-color: rgba(242,182,48,0.55); }
+.job.cloud { border-color: rgba(108,196,255,0.55); }
+.tags { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 11.5px; }
+.tags td { padding: 2px 0; border-top: 1px solid rgba(255,255,255,0.05); }
+.tags td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* right: floor -> cloud */
+.cloudpane { position: fixed; z-index: 3; top: var(--panel-top, 120px); right: max(16px, env(safe-area-inset-right, 0px)); width: 360px; max-width: calc(100% - 32px); max-height: var(--panel-max, 50%); overflow: auto; }
+.chain { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 2px 0 8px; }
+.node { font-family: var(--font-display); font-weight: 600; font-size: 13.5px; letter-spacing: 0.04em; text-transform: uppercase; padding: 3px 7px 2px; border-radius: 3px; border: 1px solid var(--line); color: var(--muted); transition: background-color 0.25s, color 0.25s, border-color 0.25s; }
+.node.floor { border-color: rgba(242,182,48,0.4); }
+.node.sky { border-color: rgba(108,196,255,0.4); }
+.node.hot { background: var(--cloud); color: #04121d; border-color: var(--cloud); }
+.node.floor.hot { background: var(--safety); color: var(--ink-on-safety); border-color: var(--safety); }
+.node.amber { background: transparent; color: var(--safety); border-color: var(--safety); }
+.arrow { color: var(--muted); font-size: 11px; }
+.linkrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 8px; flex-wrap: wrap; }
+.switch { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--fg); }
+.switch input { accent-color: var(--safety); }
+.backlog { font-family: var(--font-mono); }
+.backlog.on { color: var(--safety); }
+.log { list-style: none; margin: 0; padding: 0; font-family: var(--font-mono); font-size: 11px; line-height: 1.35; }
+.log li { padding: 4px 0; border-top: 1px solid rgba(255,255,255,0.05); display: grid; grid-template-columns: auto 1fr; gap: 0 8px; }
+.log .tm { color: var(--muted); font-variant-numeric: tabular-nums; }
+.log .tp { color: var(--cloud); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log .tp.alarm { color: var(--fault); }
+.log .tp.gw { color: var(--safety); }
+.log .pl { grid-column: 2; color: var(--fg); opacity: 0.85; overflow-wrap: anywhere; }
+.log .st { font-size: 10px; margin-left: 6px; padding: 0 4px; border-radius: 2px; border: 1px solid currentColor; }
+.log .st.q { color: var(--safety); }
+.log .st.f { color: var(--cloud); }
+
+/* hotspots over the 3D scene */
+#spots { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
+.spot { position: absolute; left: 0; top: 0; transform: translate(-50%, -100%); pointer-events: auto; display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 3px; border-radius: 999px; border: 1px solid var(--line); background: rgba(16,21,27,0.86); color: var(--fg); font-family: var(--font-display); font-weight: 600; font-size: 13.5px; letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer; white-space: nowrap; }
+.spot b { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--fg); color: #11161b; font-size: 12px; }
+.spot.plc b { background: var(--safety); color: var(--ink-on-safety); }
+.spot.cloud b { background: var(--cloud); color: #04121d; }
+.spot.both b { background: linear-gradient(90deg, var(--safety) 50%, var(--cloud) 50%); color: #11161b; }
+.spot:hover, .spot[aria-pressed="true"] { border-color: var(--fg); }
+.spot.dim { opacity: 0.22; }
+
+/* bottom HMI */
+.hmi { width: 100%; display: grid; grid-template-columns: auto 1fr auto; gap: 14px; align-items: stretch; padding: 10px 12px; }
+.ctrl { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.status-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pill { font-family: var(--font-display); font-weight: 700; font-size: 15px; letter-spacing: 0.08em; padding: 3px 10px 2px; border-radius: 3px; text-transform: uppercase; border: 1px solid currentColor; }
+.pill.run { color: var(--run); }
+.pill.stop { color: var(--muted); }
+.pill.fault { color: var(--fault); animation: blink 0.8s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0.35; } }
+.zone { font-size: 12px; color: var(--muted); font-family: var(--font-mono); }
+.zone b { color: var(--fg); font-weight: 500; }
+.btns { display: flex; gap: 7px; flex-wrap: wrap; }
+.pb { font-family: var(--font-display); font-weight: 700; font-size: 16px; letter-spacing: 0.08em; text-transform: uppercase; border: none; border-radius: 999px; padding: 8px 16px 7px; cursor: pointer; color: #0d1114; box-shadow: inset 0 -3px 0 rgba(0,0,0,0.28); }
+.pb:active { transform: translateY(1px); box-shadow: inset 0 -1px 0 rgba(0,0,0,0.28); }
+.pb.start { background: var(--run); }
+.pb.stop { background: var(--fault); color: #fff; }
+.pb.reset { background: var(--info); color: #fff; }
+.pb.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); box-shadow: none; font-size: 14px; padding: 7px 12px 6px; }
+.opts { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.seg button { background: transparent; color: var(--muted); border: none; padding: 4px 9px; font-family: var(--font-mono); font-size: 12px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--line); color: var(--fg); }
+.counts { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; min-width: 0; }
+.count { border-top: 4px solid var(--c); padding: 6px 8px 6px; background: rgba(255,255,255,0.025); border-radius: 0 0 4px 4px; min-width: 0; position: relative; }
+.count .lbl { display: flex; flex-wrap: wrap; justify-content: space-between; column-gap: 6px; row-gap: 0; font-family: var(--font-display); font-weight: 700; font-size: 15px; letter-spacing: 0.05em; color: var(--c); white-space: nowrap; }
+.count .lbl span:last-child { color: var(--muted); font-weight: 600; }
+.count .what { font-size: 11.5px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.count .n { font-family: var(--font-display); font-weight: 700; font-size: 30px; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.count .meter { height: 4px; background: rgba(255,255,255,0.08); border-radius: 2px; overflow: hidden; margin-top: 3px; }
+.count .meter i { display: block; height: 100%; width: 0; background: var(--c); }
+.count .tag { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 3px; }
+.count.flash-ok { box-shadow: inset 0 0 0 1px var(--run); }
+.count.flash-bad { box-shadow: inset 0 0 0 2px var(--fault); }
+.side { display: grid; grid-template-columns: repeat(2, auto); gap: 6px 16px; align-content: center; }
+.stat { text-align: right; font-family: var(--font-mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
+.stat b { display: block; font-family: var(--font-display); font-size: 24px; color: var(--fg); font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.stat.warn b { color: var(--fault); }
+
+@media (max-width: 1100px) {
+  .counts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .count .n { font-size: 24px; }
+}
+@media (max-width: 860px) {
+  .hmi { grid-template-columns: 1fr; gap: 9px; }
+  .side { grid-template-columns: repeat(4, auto); justify-content: space-between; }
+  .stat { text-align: left; }
+  .stat b { font-size: 19px; }
+  h1 { font-size: 23px; }
+  .spec { display: none; }
+  .count { padding: 4px 6px 4px; }
+  .count .tag, .count .what { display: none; }
+  .count .n { font-size: 21px; }
+  .leftcol { width: 250px; }
+  .spot span { display: none; }
+  .spot { padding: 3px; }
+  .pb { padding: 7px 12px 6px; font-size: 14px; }
+  .bar { align-items: stretch; }
+}
+@media (prefers-reduced-motion: reduce) { .pill.fault { animation: none; } .node { transition: none; } }
+</style>
+
+<div id="scene" aria-label="3D model of a parcel hub: two feeder trailers unload onto two induction lines, each with a scale and a six-sided scan tunnel, a label check gate that sends problem packages around a relabel loop and back onto their line, a merge, a shoe sorter feeding six color-coded chutes to package cars, and a PLC cabinet and edge gateway linked to the cloud"></div>
+<div id="spots"></div>
+
+<div class="hud top" id="hudTop">
+  <div class="card title-card">
+    <div class="eyebrow">ATX HubSort · Austin hub AUS-01 · demo data</div>
+    <h1>ATX HubSort</h1>
+    <div class="spec">2 scan tunnels · label check + relabel loop · shoe sorter · 6 doors · PLC → gateway → AWS</div>
+  </div>
+  <div class="bar">
+    <div class="card cams" role="group" aria-label="Camera views">
+      <button class="chip" data-cam="overview" aria-pressed="true">Overview</button>
+      <button class="chip" data-cam="tunnels" aria-pressed="false">Scan tunnels</button>
+      <button class="chip" data-cam="sorter" aria-pressed="false">Sorter</button>
+      <button class="chip" data-cam="cars" aria-pressed="false">Package cars</button>
+      <button class="chip" data-cam="cloud" aria-pressed="false">Floor → cloud</button>
+      <button class="chip" data-cam="tour" aria-pressed="false">Tour</button>
+      <span class="sep"></span>
+      <button class="chip" id="scanBtn" aria-pressed="true">Scan</button>
+      <button class="chip" id="cloudBtn" aria-pressed="true">Cloud</button>
+    </div>
+    <div class="card cams lens" role="group" aria-label="Show which parts match which jobs">
+      <span class="lens-label">Job lens</span>
+      <button class="chip" data-lens="all" aria-pressed="true">All</button>
+      <button class="chip" data-lens="plc" aria-pressed="false">PLC jobs</button>
+      <button class="chip" data-lens="cloud" aria-pressed="false">Cloud jobs</button>
+      <span class="sep"></span>
+      <label class="switch lens-label" style="text-transform:none"><input type="checkbox" id="tagsChk" checked> Route tags</label>
+    </div>
+  </div>
+</div>
+
+<div class="leftcol">
+  <section class="card pane" id="scanPane" aria-live="polite">
+    <h2>Last scan <span class="badge" id="sLine">–</span></h2>
+    <p class="sub">What the tunnel sent the PLC</p>
+    <dl class="kv">
+      <dt>Package</dt><dd id="sId">–</dd>
+      <dt>Barcode</dt><dd id="sRead">–</dd>
+      <dt>Label date</dt><dd id="sDate">–</dd>
+      <dt>Route</dt><dd id="sRoute">–</dd>
+      <dt>Dims</dt><dd id="sDim">–</dd>
+      <dt>Weight</dt><dd id="sWt">–</dd>
+    </dl>
+    <div class="decision" id="sDec">Waiting for first scan<small>&nbsp;</small></div>
+  </section>
+  <section class="card pane info" id="infoPane" hidden>
+    <h2><span id="iTitle">–</span><button class="close" id="iClose">Close</button></h2>
+    <p class="sub" id="iKind">–</p>
+    <p id="iWhat"></p>
+    <h3>Proves for these saved jobs</h3>
+    <div class="jobs" id="iJobs"></div>
+    <h3>Live PLC tags</h3>
+    <table class="tags" id="iTags"></table>
+  </section>
+</div>
+
+<section class="card pane cloudpane" id="cloudPane">
+  <h2>Floor → cloud</h2>
+  <p class="sub">The edge gateway reads the PLC and publishes MQTT to AWS IoT Core</p>
+  <div class="chain" id="chain">
+    <span class="node floor" data-n="plc">PLC</span><span class="arrow">›</span>
+    <span class="node floor" data-n="gw">Gateway</span><span class="arrow">›</span>
+    <span class="node sky" data-n="iot">IoT Core</span><span class="arrow">›</span>
+    <span class="node sky" data-n="lambda">Lambda</span><span class="arrow">›</span>
+    <span class="node sky" data-n="db">DynamoDB</span><span class="arrow">›</span>
+    <span class="node sky" data-n="dash">Dashboard</span>
+    <span class="node sky" data-n="tg">Telegram</span>
+  </div>
+  <div class="linkrow">
+    <label class="switch"><input type="checkbox" id="onlineChk" checked> Internet link up</label>
+    <span class="backlog" id="backlog">Buffered: 0</span>
+  </div>
+  <ul class="log" id="log"></ul>
+</section>
+
+<div class="hud bottom" id="hudBottom">
+  <div class="card hmi">
+    <div class="ctrl">
+      <div class="status-row">
+        <span class="pill run" id="pill">Running</span>
+        <span class="zone" id="zone">On belts: <b>0</b></span>
+      </div>
+      <div class="btns">
+        <button class="pb start" id="bStart">Start</button>
+        <button class="pb stop" id="bStop">Stop</button>
+        <button class="pb reset" id="bReset">Reset</button>
+      </div>
+      <div class="btns">
+        <button class="pb ghost" id="bStale" title="Put yesterday's label on the next package headed into a scan tunnel">Old label test</button>
+        <button class="pb ghost" id="bMis" title="Fire the sorter shoes to the wrong side for the next package">Mis-divert test</button>
+        <button class="pb ghost" id="bJam" title="Stick the next package at a merge to trip the 3 s jam watchdog">Jam test</button>
+      </div>
+      <div class="opts">
+        <label class="switch"><input type="checkbox" id="feedChk" checked> Feed trailers</label>
+        <span class="seg" role="group" aria-label="Simulation speed">
+          <button data-speed="1" aria-pressed="true">1×</button>
+          <button data-speed="2" aria-pressed="false">2×</button>
+          <button data-speed="4" aria-pressed="false">4×</button>
+        </span>
+      </div>
+    </div>
+    <div class="counts" id="counts"></div>
+    <div class="side">
+      <div class="stat">Pkgs / hr<b id="stPph">0</b></div>
+      <div class="stat">Loaded<b id="stTot">0</b></div>
+      <div class="stat warn">Old labels caught<b id="stStale">0</b></div>
+      <div class="stat warn">Wrong truck caught<b id="stWrong">0</b></div>
+      <div class="stat">No-reads<b id="stNoread">0</b></div>
+      <div class="stat">Relabeled · back on belt<b id="stRecirc">0</b></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function (root) {
+  // ---------- layout (meters). x runs feeder -> sorter end, z is across the floor, y is up ----------
+  const BY = 0.85, LZ = 6, GAP = 0.3, DT = 0.02;
+  const X = { BOOM: -35, SCALE: [-21, -19.4], TUN: [-16.4, -13.6], GATE: -9, TURN: -6, MAIN_END: 42 };
+  const V = { IND: 2.0, MERGE: 2.2, MAIN: 2.6, SPUR: 2.2, EXC: 1.5 };
+  const SPUR_Z = 9.2, SPUR_Y = 0.72, CAR_CAP = 140, LOADSCAN_BACK = 0.9;
+  const REL_Z = 11.0, REL_END = -21, JOIN_X = -25.5, STATION_X = -14.5, RELABEL_TIME = 2.6;
+  const DOORS = [
+    { door: 1, side: -1, x: 10, route: '214', area: 'Mueller', color: '#3cc8b4' },
+    { door: 2, side: -1, x: 19, route: '227', area: 'Hyde Park', color: '#9ad15a' },
+    { door: 3, side: -1, x: 28, route: '231', area: 'Cherrywood', color: '#f08a3c' },
+    { door: 4, side: 1, x: 10, route: '240', area: 'Zilker', color: '#6f8ff0' },
+    { door: 5, side: 1, x: 19, route: '256', area: 'Travis Heights', color: '#e46fb8' },
+    { door: 6, side: 1, x: 28, route: '263', area: 'Riverside', color: '#e6c35a' },
+  ];
+  const BINS = {
+    NOSORT: { x: X.MAIN_END + 2.4, z: 0, y: 0.1, hx: 0.62, hz: 0.62, name: 'No-sort' },
+  };
+
+  const SEG = {};
+  function seg(id, a, b, v, kind, cross) {
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    SEG[id] = { id, x0: a[0], z0: a[1], y0: a[2], x1: b[0], z1: b[1], y1: b[2], v, kind, cross: !!cross, len, ang: Math.atan2(b[1] - a[1], b[0] - a[0]) };
+  }
+  for (const [L, s] of [['A', -1], ['B', 1]]) {
+    const z = s * LZ;
+    seg('IND1_' + L, [X.BOOM, z, BY], [X.GATE, z, BY], V.IND, 'belt');
+    seg('IND2_' + L, [X.GATE, z, BY], [X.TURN, z, BY], V.IND, 'belt');
+    seg('MRG_' + L, [X.TURN, z, BY], [0, 0, BY], V.MERGE, 'belt');
+    seg('EXC_' + L, [X.GATE, z, BY], [X.GATE, s * REL_Z, BY - 0.12], V.EXC, 'roller', true);
+    seg('REL_' + L, [X.GATE, s * REL_Z, BY - 0.12], [REL_END, s * REL_Z, BY - 0.12], 1.3, 'belt');
+    seg('RET_' + L, [REL_END, s * REL_Z, BY - 0.12], [JOIN_X, s * (LZ + 0.6), BY], 1.6, 'belt');
+  }
+  seg('MAIN', [0, 0, BY], [X.MAIN_END, 0, BY], V.MAIN, 'sorter');
+  seg('NOSORT', [X.MAIN_END, 0, BY], [X.MAIN_END + 1.7, 0, BY - 0.3], V.EXC, 'roller');
+  DOORS.forEach((d, i) => seg('SPUR' + i, [d.x, 0, BY], [d.x, d.side * SPUR_Z, SPUR_Y], V.SPUR, 'roller', true));
+  const ORDER = ['SPUR0', 'SPUR1', 'SPUR2', 'SPUR3', 'SPUR4', 'SPUR5', 'NOSORT', 'RET_A', 'RET_B', 'REL_A', 'REL_B', 'EXC_A', 'EXC_B', 'MAIN', 'MRG_A', 'MRG_B', 'IND2_A', 'IND2_B', 'IND1_A', 'IND1_B'];
+
+  function at(sg, s) {
+    const f = sg.len ? Math.min(1, Math.max(0, s / sg.len)) : 0;
+    return { x: sg.x0 + (sg.x1 - sg.x0) * f, z: sg.z0 + (sg.z1 - sg.z0) * f, y: sg.y0 + (sg.y1 - sg.y0) * f };
+  }
+  const MON = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+  const fmtDay = d => MON[d.getMonth()] + ' ' + String(d.getDate()).padStart(2, '0');
+  function rng(seed) { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
+  const READ_P = { env: 0.965, box: 0.985, bag: 0.93, big: 0.975 };
+
+  function createSim(opts = {}) {
+    const rand = rng(opts.seed || 11);
+    const r = (a, b) => a + rand() * (b - a);
+    const now = opts.now ? new Date(opts.now) : new Date();
+    const TODAY = fmtDay(now), YESTERDAY = fmtDay(new Date(now.getTime() - 864e5));
+    const pkgs = [];
+    const bins = { NOSORT: [] };
+    const fill = DOORS.map(() => 0);
+    const T = {
+      Start_PB: false, Stop_PB: false, Reset_PB: false,
+      System_Run: false, Jam_Fault: false, Jam_Zone: '',
+      Line_A_Run: false, Line_B_Run: false, Sorter_Run: false,
+      PE_A_TunnelEntry: false, PE_B_TunnelEntry: false, Tunnel_A_Lights: false, Tunnel_B_Lights: false,
+      Scale_A_Wt: 0, Scale_B_Wt: 0,
+      Scan_A_ReadOK: false, Scan_B_ReadOK: false, Scan_A_Route: 0, Scan_B_Route: 0,
+      Label_A_Stale: false, Label_B_Stale: false,
+      Div_A_Exception: false, Div_B_Exception: false,
+      PE_A_Merge: false, PE_B_Merge: false, Jam_Timer_A: 0, Jam_Timer_B: 0,
+      Shoe_D1: false, Shoe_D2: false, Shoe_D3: false, Shoe_D4: false, Shoe_D5: false, Shoe_D6: false,
+      LoadScan_D1: '', LoadScan_D2: '', LoadScan_D3: '', LoadScan_D4: '', LoadScan_D5: '', LoadScan_D6: '',
+      Count_D1: 0, Count_D2: 0, Count_D3: 0, Count_D4: 0, Count_D5: 0, Count_D6: 0,
+      Count_Total: 0, Count_Inducted: 0, Count_Stale: 0, Count_NoRead: 0, Count_Recirc: 0, Count_WrongDoor: 0,
+      Relabel_A_Busy: false, Relabel_B_Busy: false, Count_Relabeled: 0, Count_Reinducted: 0,
+      Pkg_Per_Hour: 0,
+      Gateway_Online: true, Gateway_Backlog: 0, Gateway_Sent: 0,
+    };
+    const S = {
+      time: 0, acc: 0, feed: true, nextId: 400101, nextSpawn: { A: 0.3, B: 0.9 },
+      pulses: {}, jamNext: false, misNext: false, staleNext: false,
+      lastScan: null, ev: [], evBase: 0, log: [], backlog: [], flushAcc: 0,
+      loadTimes: [], batch: { n: 0, a: 0, b: 0, stale: 0, noread: 0 }, nextBatch: 2, nextMetrics: 4,
+      shoeT: [0, 0, 0, 0, 0, 0], lsT: [0, 0, 0, 0, 0, 0], excT: { A: 0, B: 0 },
+    };
+    function ev(type, data) { S.ev.push(Object.assign({ type, t: S.time }, data)); if (S.ev.length > 400) { S.ev.splice(0, 200); S.evBase += 200; } }
+
+    // ---------- edge gateway: publishes to the cloud, buffers while the link is down ----------
+    let msgId = 1;
+    function publish(topic, payload, kind) {
+      const m = { id: msgId++, t: S.time, topic: 'atxhubsort/aus01/' + topic, payload, kind: kind || 'data' };
+      if (T.Gateway_Online) { m.status = 'sent'; T.Gateway_Sent++; ev('pub', { kind: m.kind, live: true }); }
+      else { m.status = 'queued'; S.backlog.push(m); ev('pub', { kind: m.kind, live: false }); }
+      S.log.push(m); if (S.log.length > 80) S.log.splice(0, 40);
+    }
+
+    function makePkg(line) {
+      const u = rand();
+      let kind, L, W, H, Wt;
+      if (u < 0.24) { kind = 'env'; L = r(0.3, 0.36); W = r(0.22, 0.27); H = r(0.02, 0.035); Wt = r(0.3, 1.2); }
+      else if (u < 0.58) { kind = 'box'; L = r(0.3, 0.44); W = r(0.24, 0.34); H = r(0.16, 0.3); Wt = r(2, 12); }
+      else if (u < 0.8) { kind = 'bag'; L = r(0.42, 0.56); W = r(0.3, 0.4); H = r(0.08, 0.14); Wt = r(1, 5); }
+      else { kind = 'big'; L = r(0.6, 0.78); W = r(0.46, 0.6); H = r(0.4, 0.54); Wt = r(20, 48); }
+      const door = Math.floor(rand() * 6);
+      return {
+        id: S.nextId++, line, kind, L, W, H, Wt, door, stale: rand() < 0.025, variant: Math.floor(rand() * 3), jit: r(-0.06, 0.06),
+        seg: 'IND1_' + line, s: 0, state: 'belt', scanned: false, read: false, exc: null, passed: false, onDoor: -1, stuck: false, hold: 0,
+      };
+    }
+    const ext = (p, sg) => (sg.cross ? p.W : p.L);
+    function canEnter(sid, e) {
+      for (const q of pkgs) if (q.state === 'belt' && q.seg === sid && q.s - ext(q, SEG[sid]) / 2 < e + GAP) return false;
+      return true;
+    }
+    function trySpawn(line) {
+      const p = makePkg(line);
+      p.s = p.L / 2;
+      if (!canEnter(p.seg, p.L)) { S.nextId--; return false; }
+      pkgs.push(p); T.Count_Inducted++; return true;
+    }
+
+    function binIt(p, binId) {
+      const b = BINS[binId], list = bins[binId];
+      const sg = SEG[p.seg], from = at(sg, sg.len);
+      const n = list.length;
+      p.state = 'drop'; p.ft = 0; p.bin = binId;
+      p.from = from;
+      p.to = { x: b.x + r(-1, 1) * Math.max(0, b.hx - p.L / 2 - 0.05), z: b.z + r(-1, 1) * Math.max(0, b.hz - p.W / 2 - 0.05), y: b.y + 0.04 + Math.floor(n / 5) * 0.14 + p.H / 2 };
+      p.rot = r(-0.5, 0.5);
+    }
+    function loadIt(p, i) {
+      const d = DOORS[i];
+      p.state = 'load'; p.ft = 0; p.onDoor = i;
+      T['Count_D' + (i + 1)]++; T.Count_Total++;
+      S.loadTimes.push(S.time);
+      fill[i]++;
+      ev('load', { door: i });
+      if (fill[i] >= CAR_CAP) {
+        publish('door/' + d.door + '/dispatched', { route: d.route, pkgs: fill[i] }, 'info');
+        ev('dispatch', { door: i });
+        fill[i] = 0;
+      }
+    }
+
+    // next segment after reaching the end of `id`
+    function transfer(p, id) {
+      if (p.stuck) return false;
+      const L = id.slice(-1);
+      let nxt;
+      if (id.startsWith('IND1_')) {
+        if (p.exc) {
+          nxt = 'EXC_' + L;
+          if (!canEnter(nxt, ext(p, SEG[nxt]))) return false;
+          T['Div_' + L + '_Exception'] = true; S.excT[L] = S.time; ev('exc', { line: L, why: p.exc });
+          p.seg = nxt; p.s = 0; return true;
+        }
+        nxt = 'IND2_' + L;
+      } else if (id.startsWith('IND2_')) nxt = 'MRG_' + L;
+      else if (id.startsWith('MRG_')) {
+        if (S.jamNext) { S.jamNext = false; p.stuck = true; T.Jam_Zone = 'MERGE_' + L; return false; }
+        nxt = 'MAIN';
+        if (S.misNext && canEnter(nxt, p.L)) { p.mis = true; S.misNext = false; }
+      } else if (id === 'MAIN') nxt = 'NOSORT';
+      else if (id.startsWith('EXC_')) nxt = 'REL_' + L;
+      else if (id.startsWith('REL_')) nxt = 'RET_' + L;
+      else if (id.startsWith('RET_')) {
+        // re-induct: slide back onto the same line ahead of the scale and tunnel, only into a real gap
+        const sid = 'IND1_' + L, sj = JOIN_X - X.BOOM;
+        for (const q of pkgs) if (q.state === 'belt' && q.seg === sid && Math.abs(q.s - sj) < q.L / 2 + p.L / 2 + GAP) return false;
+        p.seg = sid; p.s = sj; p.scanned = false; p.exc = null; p.fixed = false; p.dwell = 0; p.passed = false;
+        T.Count_Reinducted++; ev('reinduct', { line: L });
+        return true;
+      }
+      else if (id === 'NOSORT') { binIt(p, 'NOSORT'); T.Count_Recirc++; return true; }
+      else if (id.startsWith('SPUR')) {
+        // door confirm scan: the label route must match this truck
+        const i = +id.slice(4);
+        if (p.door === i) { T['LoadScan_D' + (i + 1)] = 'OK'; S.lsT[i] = S.time; loadIt(p, i); return true; }
+        if (!p.hold) {
+          p.hold = S.time; T['LoadScan_D' + (i + 1)] = 'WRONG'; S.lsT[i] = S.time; T.Count_WrongDoor++;
+          ev('wrong', { door: i, should: p.door });
+          publish('alarm/wrong_door', { pkg: 'HL' + p.id, door: DOORS[i].door, label_route: DOORS[p.door].route, truck_route: DOORS[i].route }, 'alarm');
+        }
+        if (S.time - p.hold > 2.2) { p.state = 'pulled'; p.ft = 0; p.onDoor = i; return true; } // operator pulls it for re-sort
+        return false;
+      }
+      if (!canEnter(nxt, ext(p, SEG[nxt]))) return false;
+      p.seg = nxt; p.s = 0; return true;
+    }
+
+    function moveSeg(id, list, dt, run) {
+      const sg = SEG[id];
+      list.sort((a, b) => b.s - a.s);
+      let ahead = null;
+      for (const p of list) {
+        const e = ext(p, sg);
+        let ns = p.s + (run && !p.stuck ? sg.v : 0) * dt;
+        if (ahead) { const lim = ahead.s - ext(ahead, sg) / 2 - e / 2 - GAP; if (ns > lim) ns = Math.max(p.s, lim); }
+        if (id.startsWith('REL_') && !p.fixed) {
+          const st = X.GATE - STATION_X;
+          if (ns >= st) {
+            ns = Math.max(p.s, st);
+            if (run) p.dwell = (p.dwell || 0) + dt;
+            if (p.dwell >= RELABEL_TIME) {
+              const L2 = id.slice(-1), why = p.exc;
+              if (why === 'STALE') p.stale = false; else p.forceRead = true;
+              p.fixed = true; p.exc = 'FIXED'; T.Count_Relabeled++;
+              ev('relabel', { line: L2, why });
+              publish('exception/relabeled', { pkg: 'HL' + p.id, line: L2, reason: why === 'STALE' ? 'old_label' : 'no_read', back_on: 'line_' + L2 }, 'info');
+            }
+          }
+        }
+        if (id === 'MAIN' && !p.passed) {
+          // shoe sorter: fire the shoes when the package lines up with its door
+          let target = p.door;
+          if (p.mis) target = p.door < 3 ? p.door + 3 : p.door - 3; // mis-divert test: shoes fire to the wrong side
+          const dx = DOORS[target].x;
+          if (ns >= dx) {
+            const sid = 'SPUR' + target;
+            p.passed = true;
+            if (run && canEnter(sid, ext(p, SEG[sid]))) {
+              T['Shoe_D' + (target + 1)] = true; S.shoeT[target] = S.time; ev('divert', { door: target });
+              p.seg = sid; p.s = 0; continue;
+            }
+            p.recirc = true; // lane full: ride to no-sort
+          }
+        }
+        if (ns >= sg.len) { if (transfer(p, id)) continue; ns = Math.max(p.s, Math.min(ns, sg.len)); }
+        p.s = Math.min(ns, sg.len);
+        ahead = p;
+      }
+    }
+
+    function scan(p, L) {
+      p.scanned = true;
+      p.read = p.forceRead || rand() < READ_P[p.kind];
+      if (S.staleNext) { p.stale = true; S.staleNext = false; }
+      T['Scan_' + L + '_ReadOK'] = p.read;
+      T['Scan_' + L + '_Route'] = p.read ? +DOORS[p.door].route : 0;
+      T['Label_' + L + '_Stale'] = p.read && p.stale;
+      if (!p.read) { p.exc = 'NOREAD'; T.Count_NoRead++; S.batch.noread++; publish('alarm/no_read', { pkg: 'HL' + p.id, line: L }, 'alarm'); }
+      else if (p.stale) { p.exc = 'STALE'; T.Count_Stale++; S.batch.stale++; publish('alarm/old_label', { pkg: 'HL' + p.id, line: L, label: YESTERDAY, today: TODAY }, 'alarm'); }
+      S.batch.n++; S.batch[L.toLowerCase()]++;
+      const tin = m => Math.round(m * 39.37 * 10) / 10;
+      S.lastScan = { id: 'HL' + p.id, line: L, read: p.read, stale: p.stale, kind: p.kind, door: p.door, route: DOORS[p.door].route, area: DOORS[p.door].area, color: DOORS[p.door].color, label: p.stale ? YESTERDAY : TODAY, dims: tin(p.L) + ' × ' + tin(p.W) + ' × ' + tin(p.H) + ' in', wt: (Math.round(p.Wt * 2.2046 * 10) / 10) + ' lb', exc: p.exc, cam: p.read ? ['TOP', 'SIDE L', 'SIDE R', 'FRONT', 'BACK', 'BOTTOM'][Math.floor(rand() * 6)] : null };
+      ev('scan', { line: L });
+    }
+
+    function inputs() {
+      for (const L of ['A', 'B']) {
+        const i1 = SEG['IND1_' + L], mg = SEG['MRG_' + L];
+        let entry = false, inTun = false, wt = 0;
+        for (const p of pkgs) {
+          if (p.state !== 'belt') continue;
+          if (p.seg === 'IND1_' + L) {
+            const x = i1.x0 + p.s, x0 = x - p.L / 2, x1 = x + p.L / 2;
+            if (x0 <= X.TUN[0] && x1 >= X.TUN[0]) entry = true;
+            if (x1 >= X.TUN[0] && x0 <= X.TUN[1]) inTun = true;
+            const sc = (X.SCALE[0] + X.SCALE[1]) / 2;
+            if (x0 <= sc && x1 >= sc) wt = Math.round(p.Wt * 2.2046 * 10) / 10;
+            if (!p.scanned && x0 >= X.TUN[1]) scan(p, L);
+          }
+        }
+        T['PE_' + L + '_TunnelEntry'] = entry;
+        T['Tunnel_' + L + '_Lights'] = T.System_Run && inTun;
+        T['Scale_' + L + '_Wt'] = wt;
+        T['PE_' + L + '_Merge'] = pkgs.some(p => p.state === 'belt' && p.seg === 'MRG_' + L && p.s >= mg.len - 0.35);
+        if (S.time - S.excT[L] > 0.4) T['Div_' + L + '_Exception'] = false;
+        T['Relabel_' + L + '_Busy'] = pkgs.some(p => p.state === 'belt' && p.seg === 'REL_' + L && !p.fixed && p.dwell > 0);
+      }
+      for (let i = 0; i < 6; i++) {
+        if (S.time - S.shoeT[i] > 0.35) T['Shoe_D' + (i + 1)] = false;
+        if (S.time - S.lsT[i] > 1.2) T['LoadScan_D' + (i + 1)] = '';
+      }
+      for (const k of ['Start_PB', 'Stop_PB', 'Reset_PB']) { T[k] = (S.pulses[k] || 0) > 0; if (S.pulses[k] > 0) S.pulses[k] -= DT; }
+    }
+
+    // ---------- PLC program (the rungs, in order) ----------
+    function plc(dt) {
+      if (T.Reset_PB && !T.System_Run) {
+        if (T.Jam_Fault || pkgs.some(p => p.stuck)) {
+          for (const p of pkgs) if (p.stuck) { p.state = 'gone'; }
+          publish('alarm/jam_cleared', { zone: T.Jam_Zone }, 'info');
+        }
+        T.Jam_Fault = false; T.Jam_Zone = ''; T.Jam_Timer_A = 0; T.Jam_Timer_B = 0;
+      }
+      const was = T.System_Run;
+      if (T.Stop_PB || T.Jam_Fault) T.System_Run = false;
+      else if (T.Start_PB) T.System_Run = true;
+      if (was !== T.System_Run) publish('state', { run: T.System_Run, reason: T.Jam_Fault ? 'jam' : T.Stop_PB ? 'stop_pb' : 'start_pb' }, 'info');
+      T.Line_A_Run = T.Line_B_Run = T.Sorter_Run = T.System_Run;
+      // jam watchdog: merge eye blocked for 3 s while running
+      for (const L of ['A', 'B']) {
+        const k = 'Jam_Timer_' + L;
+        const blocked = T['PE_' + L + '_Merge'] && pkgs.some(p => p.state === 'belt' && p.seg === 'MRG_' + L && p.stuck);
+        T[k] = T.System_Run && blocked ? Math.min(3, T[k] + dt) : 0;
+        if (T[k] >= 3 && !T.Jam_Fault) {
+          T.Jam_Fault = true; T.System_Run = false; T.Line_A_Run = T.Line_B_Run = T.Sorter_Run = false;
+          publish('alarm/jam', { zone: 'MERGE_' + L, watchdog_s: 3 }, 'alarm');
+          publish('state', { run: false, reason: 'jam' }, 'info');
+        }
+      }
+    }
+
+    function stepOnce(dt) {
+      S.time += dt;
+      const run = T.System_Run;
+      if (run && S.feed) for (const L of ['A', 'B']) {
+        if (S.time >= S.nextSpawn[L]) S.nextSpawn[L] = trySpawn(L) ? S.time + 1.05 + rand() * 0.9 : S.time + 0.25;
+      }
+      const by = {};
+      for (const p of pkgs) if (p.state === 'belt') (by[p.seg] = by[p.seg] || []).push(p);
+      for (const id of ORDER) if (by[id]) moveSeg(id, by[id], dt, run);
+      for (const p of pkgs) {
+        if (p.state === 'drop') {
+          p.ft += dt;
+          if (p.ft >= 0.45) {
+            p.state = 'binned'; const list = bins[p.bin]; list.push(p);
+            if (list.length > 18) list.shift().state = 'gone';
+          }
+        } else if (p.state === 'load' || p.state === 'pulled') { p.ft += dt; if (p.ft >= 0.7) p.state = 'gone'; }
+      }
+      for (let i = pkgs.length - 1; i >= 0; i--) if (pkgs[i].state === 'gone') pkgs.splice(i, 1);
+      inputs();
+      plc(dt);
+      // gateway: scan batches, heartbeat metrics, buffer flush
+      while (S.loadTimes.length && S.loadTimes[0] < S.time - 120) S.loadTimes.shift();
+      T.Pkg_Per_Hour = Math.round(S.loadTimes.length * 30);
+      if (S.time >= S.nextBatch) {
+        S.nextBatch = S.time + 2;
+        if (S.batch.n) publish('scans', Object.assign({}, S.batch), 'data');
+        S.batch = { n: 0, a: 0, b: 0, stale: 0, noread: 0 };
+      }
+      if (S.time >= S.nextMetrics) {
+        S.nextMetrics = S.time + 10;
+        publish('metrics', { pph: T.Pkg_Per_Hour, loaded: T.Count_Total, old_labels: T.Count_Stale, wrong_door: T.Count_WrongDoor }, 'data');
+      }
+      if (T.Gateway_Online && S.backlog.length) {
+        S.flushAcc += dt * 15;
+        while (S.flushAcc >= 1 && S.backlog.length) {
+          S.flushAcc -= 1;
+          const m = S.backlog.shift(); m.status = 'sent'; m.flushed = true; T.Gateway_Sent++;
+          ev('pub', { kind: m.kind, live: true });
+        }
+      } else S.flushAcc = 0;
+      T.Gateway_Backlog = S.backlog.length;
+    }
+
+    function step(dt) { S.acc += dt; let n = 0; while (S.acc >= DT && n < 400) { stepOnce(DT); S.acc -= DT; n++; } if (n >= 400) S.acc = 0; }
+    function press(name) { S.pulses[name] = 0.1; }
+    function setOnline(on) {
+      if (T.Gateway_Online === on) return;
+      T.Gateway_Online = on;
+      S.log.push({ id: msgId++, t: S.time, topic: 'gateway', payload: on ? { link: 'up', flushing: S.backlog.length } : { link: 'down', mode: 'store_and_forward' }, kind: 'gw', status: on ? 'sent' : 'queued' });
+    }
+    // position + yaw of a package in world space
+    function place(p) {
+      if (p.state === 'belt') {
+        const sg = SEG[p.seg], q = at(sg, p.s);
+        let yaw = sg.cross ? 0 : sg.ang;
+        if (p.seg.startsWith('SPUR')) yaw = 0;
+        return { x: q.x, y: q.y + p.H / 2 + 0.005, z: q.z, yaw: yaw + p.jit };
+      }
+      if (p.state === 'drop' || p.state === 'binned') {
+        const f = p.state === 'binned' ? 1 : Math.min(1, p.ft / 0.45);
+        return { x: p.from.x + (p.to.x - p.from.x) * f, z: p.from.z + (p.to.z - p.from.z) * f, y: (p.from.y + p.H / 2) + (p.to.y - p.from.y - p.H / 2) * f * f, yaw: p.rot * f + p.jit };
+      }
+      if (p.state === 'load' || p.state === 'pulled') {
+        const d = DOORS[p.onDoor], f = Math.min(1, p.ft / 0.7);
+        if (p.state === 'load') return { x: d.x + p.jit * 4, z: d.side * (SPUR_Z + 0.2 + f * 2.2), y: SPUR_Y + p.H / 2 + 0.02, yaw: p.jit, fade: f };
+        return { x: d.x + 0.9 * f, z: d.side * SPUR_Z, y: SPUR_Y + p.H / 2 + 0.25 * Math.sin(f * Math.PI), yaw: p.jit, fade: f };
+      }
+      return null;
+    }
+    return {
+      T, S, pkgs, bins, fill, step, press, place, setOnline, TODAY, YESTERDAY,
+      jam() { S.jamNext = true; }, misdivert() { S.misNext = true; markMis(); }, oldLabel() { markStale(); },
+    };
+    function markStale() {
+      // tag the next package that will enter a tunnel
+      let best = null;
+      for (const p of pkgs) if (p.state === 'belt' && p.seg.startsWith('IND1_') && !p.scanned) { if (!best || p.s > best.s) best = p; }
+      if (best) best.stale = true; else S.staleNext = true;
+    }
+    function markMis() {
+      let best = null;
+      for (const p of pkgs) if (p.state === 'belt' && !p.exc && !p.passed && (p.seg === 'MAIN' || p.seg.startsWith('MRG_') || p.seg.startsWith('IND2_'))) {
+        const xx = p.seg === 'MAIN' ? p.s : -100 + p.s;
+        if (p.seg === 'MAIN' && p.s > DOORS[p.door].x - 1.5) continue;
+        if (!best || xx > best.xx) best = { p, xx };
+      }
+      if (best) { best.p.mis = true; S.misNext = false; }
+    }
+  }
+  root.HubCore = { createSim, SEG, DOORS, BINS, X, BY, LZ, SPUR_Z, SPUR_Y, CAR_CAP, GAP, REL_Z, STATION_X, JOIN_X, REL_END };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+(async function () {
+  const H = window.HubCore;
+  const { SEG, DOORS, BINS, X, BY, LZ, SPUR_Z, SPUR_Y, CAR_CAP, REL_Z, STATION_X } = H;
+  const sim = H.createSim({ seed: 17 });
+  const T = sim.T, S = sim.S;
+  sim.press('Start_PB');
+  for (let i = 0; i < 4500; i++) sim.step(0.02); // open mid-shift (90 s of sim)
+  // give the trucks a realistic mid-shift load
+  DOORS.forEach((d, i) => { sim.fill[i] = Math.min(CAR_CAP - 10, sim.fill[i] + [62, 35, 88, 51, 104, 23][i]); });
+
+  // ---------------- HMI (works even if 3D fails) ----------------
+  const $ = id => document.getElementById(id);
+  const countsEl = $('counts');
+  DOORS.forEach((d, i) => {
+    const el = document.createElement('div');
+    el.className = 'count'; el.style.setProperty('--c', d.color); el.id = 'cnt' + i;
+    el.innerHTML = `<div class="lbl"><span>DOOR ${d.door}</span><span>RT ${d.route}</span></div><div class="what">${d.area}</div><div class="n" id="cn${i}">0</div><div class="meter"><i id="cm${i}"></i></div><div class="tag">Count_D${d.door} · <span id="cp${i}">0</span>% loaded</div>`;
+    countsEl.appendChild(el);
+  });
+  let speed = 1;
+  function placePanels() {
+    const top = $('hudTop').getBoundingClientRect().bottom + 8;
+    const bot = $('hudBottom').getBoundingClientRect().top - 8;
+    document.documentElement.style.setProperty('--panel-top', top + 'px');
+    document.documentElement.style.setProperty('--panel-max', Math.max(140, bot - top) + 'px');
+  }
+  window.addEventListener('resize', placePanels); placePanels(); setTimeout(placePanels, 600);
+  if (document.fonts) document.fonts.ready.then(placePanels);
+  $('bStart').onclick = () => sim.press('Start_PB');
+  $('bStop').onclick = () => sim.press('Stop_PB');
+  $('bReset').onclick = () => sim.press('Reset_PB');
+  $('bStale').onclick = () => sim.oldLabel();
+  $('bMis').onclick = () => sim.misdivert();
+  $('bJam').onclick = () => sim.jam();
+  $('feedChk').onchange = e => { S.feed = e.target.checked; };
+  $('onlineChk').onchange = e => sim.setOnline(e.target.checked);
+  document.querySelectorAll('[data-speed]').forEach(b => b.onclick = () => {
+    speed = +b.dataset.speed;
+    document.querySelectorAll('[data-speed]').forEach(x => x.setAttribute('aria-pressed', x === b));
+  });
+  const narrow = () => window.innerWidth < 860;
+  function setPane(btn, pane, on) { btn.setAttribute('aria-pressed', on); pane.hidden = !on; }
+  setPane($('scanBtn'), $('scanPane'), !narrow());
+  setPane($('cloudBtn'), $('cloudPane'), !narrow());
+  $('scanBtn').onclick = () => { const on = $('scanBtn').getAttribute('aria-pressed') !== 'true'; setPane($('scanBtn'), $('scanPane'), on); if (on) closeInfo(); if (on && narrow()) setPane($('cloudBtn'), $('cloudPane'), false); };
+  $('cloudBtn').onclick = () => { const on = $('cloudBtn').getAttribute('aria-pressed') !== 'true'; setPane($('cloudBtn'), $('cloudPane'), on); if (on && narrow()) { setPane($('scanBtn'), $('scanPane'), false); closeInfo(); } };
+
+  const fmtT = t => { const s = Math.floor(t); const base = 6 * 3600 + 12 * 60; const v = base + s; const h = Math.floor(v / 3600) % 24, m = Math.floor(v / 60) % 60, ss = v % 60; return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`; };
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  let lastLogId = -1, lastScanId = null, logSig = '';
+  function updateHMI() {
+    const pill = $('pill');
+    if (T.Jam_Fault) { pill.className = 'pill fault'; pill.textContent = 'Jam fault'; }
+    else if (T.System_Run) { pill.className = 'pill run'; pill.textContent = 'Running'; }
+    else { pill.className = 'pill stop'; pill.textContent = 'Stopped'; }
+    const onBelt = sim.pkgs.filter(p => p.state === 'belt').length;
+    $('zone').innerHTML = T.Jam_Fault ? `Jam at <b>${T.Jam_Zone.replace('_', ' ')}</b> · clear it with Reset, then Start` : T.System_Run ? `On belts: <b>${onBelt}</b> · ${fmtT(S.time)}` : `On belts: <b>${onBelt}</b> · press Start`;
+    DOORS.forEach((d, i) => {
+      $('cn' + i).textContent = T['Count_D' + d.door];
+      const pct = Math.round(sim.fill[i] / CAR_CAP * 100);
+      $('cm' + i).style.width = pct + '%'; $('cp' + i).textContent = pct;
+      const c = $('cnt' + i), ls = T['LoadScan_D' + d.door];
+      c.classList.toggle('flash-ok', ls === 'OK'); c.classList.toggle('flash-bad', ls === 'WRONG');
+    });
+    $('stPph').textContent = T.Pkg_Per_Hour.toLocaleString();
+    $('stTot').textContent = T.Count_Total;
+    $('stStale').textContent = T.Count_Stale;
+    $('stWrong').textContent = T.Count_WrongDoor;
+    $('stNoread').textContent = T.Count_NoRead;
+    $('stRecirc').textContent = T.Count_Relabeled;
+    const bl = $('backlog'); bl.textContent = T.Gateway_Online ? (T.Gateway_Backlog ? `Sending buffer: ${T.Gateway_Backlog}` : `Buffered: 0`) : `Link down · buffered: ${T.Gateway_Backlog}`; bl.classList.toggle('on', !T.Gateway_Online || T.Gateway_Backlog > 0);
+    // last scan
+    const ls = S.lastScan;
+    if (ls && ls.id !== lastScanId) {
+      lastScanId = ls.id;
+      $('sLine').textContent = 'Tunnel ' + ls.line;
+      $('sId').textContent = ls.id + ' · ' + ({ env: 'envelope', box: 'box', bag: 'poly bag', big: 'large box' }[ls.kind]);
+      $('sRead').innerHTML = ls.read ? `<span class="ok">READ</span> · ${ls.cam} cam` : `<span class="bad">NO READ</span>`;
+      $('sDate').innerHTML = ls.read ? (ls.stale ? `<span class="bad">${ls.label} (old)</span>` : `<span class="ok">${ls.label} (today)</span>`) : '–';
+      $('sRoute').innerHTML = ls.read ? `<span class="routechip" style="--c:${ls.color}"><i></i>RT ${ls.route} · door ${ls.door + 1}</span>` : '–';
+      $('sDim').textContent = ls.dims; $('sWt').textContent = ls.wt;
+      const dec = $('sDec');
+      if (ls.exc === 'NOREAD') { dec.style.setProperty('--c', 'var(--fault)'); dec.innerHTML = `No read → relabel ${ls.line}<small>Gate pushes it to the relabel station, then back onto line ${ls.line}</small>`; }
+      else if (ls.exc === 'STALE') { dec.style.setProperty('--c', 'var(--fault)'); dec.innerHTML = `Old label → relabel ${ls.line}<small>Label says ${esc(sim.YESTERDAY)}, today is ${esc(sim.TODAY)}. New label, then back onto line ${ls.line}.</small>`; }
+      else { dec.style.setProperty('--c', ls.color); dec.innerHTML = `Door ${ls.door + 1} · RT ${ls.route}<small>${esc(ls.area)} · door scanner will confirm before loading</small>`; }
+    }
+    // log
+    const lg = S.log;
+    const sig = lg.length + ':' + (lg.length ? lg[lg.length - 1].id + lg[lg.length - 1].status : '') + ':' + lg.filter(m => m.flushed).length;
+    if (sig !== logSig) {
+      logSig = sig;
+      const rows = lg.slice(-7).reverse().map(m => {
+        const st = m.status === 'queued' ? '<span class="st q">queued</span>' : m.flushed ? '<span class="st f">sent from buffer</span>' : '';
+        const topic = m.topic.replace('atxhubsort/aus01/', '');
+        return `<li><span class="tm">${fmtT(m.t)}</span><span class="tp ${m.kind}">${esc(topic)}${st}</span><span class="pl">${esc(JSON.stringify(m.payload))}</span></li>`;
+      });
+      $('log').innerHTML = rows.join('');
+    }
+  }
+
+  // ---------------- info cards for the hotspots ----------------
+  const JOB = {
+    rovisys: ['RoviSys · Controls Specialist', 'plc'], dura: ['Dura-Line · OT Engineer', 'plc'], agi: ['Advanced Giga · PLC Engineer', 'plc'],
+    samba: ['SambaNova · Cloud Platform', 'cloud'], brite: ['Brite · Cloud Engineer', 'cloud'], goodwill: ['Goodwill · Infrastructure', 'cloud'], fab2: ['Fab2 · Infrastructure', 'cloud'],
+  };
+  const SPOTS = [
+    { id: 'feed', n: 1, name: 'Feeder trailers', lens: 'plc', pos: [-37.5, 4.4, 0], what: 'Two trailers unload onto extendable boom belts. The PLC only feeds a line when the belt ahead has room, so packages never pile up at the boom.', jobs: ['rovisys', 'agi'], tags: ['Line_A_Run', 'Line_B_Run', 'Count_Inducted'] },
+    { id: 'tunA', n: 2, name: 'Scan tunnel A', lens: 'plc', pos: [-15, 3.4, -LZ], what: 'In-motion scale, then a 6-sided tunnel: top, bottom, two side mirrors, front and back cameras. It reads the label from any side and sends route, label date, size and weight to the PLC.', jobs: ['rovisys', 'dura', 'agi'], tags: ['PE_A_TunnelEntry', 'Tunnel_A_Lights', 'Scale_A_Wt', 'Scan_A_ReadOK', 'Scan_A_Route', 'Label_A_Stale'] },
+    { id: 'tunB', n: 3, name: 'Scan tunnel B', lens: 'plc', pos: [-15, 3.4, LZ], what: 'Same tunnel on line B. Two lines double the hub throughput, and either one can keep running if the other is down for maintenance.', jobs: ['rovisys', 'dura', 'agi'], tags: ['PE_B_TunnelEntry', 'Tunnel_B_Lights', 'Scale_B_Wt', 'Scan_B_ReadOK', 'Scan_B_Route', 'Label_B_Stale'] },
+    { id: 'gate', n: 4, name: 'Label check gates', lens: 'plc', pos: [X.GATE, 2.6, LZ + 2.2], what: 'The misload fix. If the label date is not today, or the tunnel got no read, a pop-up diverter pushes the package off to the relabel loop before it can reach a truck.', jobs: ['agi', 'rovisys'], tags: ['Label_A_Stale', 'Label_B_Stale', 'Div_A_Exception', 'Div_B_Exception', 'Count_Stale', 'Count_NoRead'] },
+    { id: 'merge', n: 5, name: 'Merge + jam watchdog', lens: 'plc', pos: [-2.5, 2.4, 0], what: 'Both lines merge onto the sorter. A photo-eye at each merge feeds a 3-second watchdog timer. If a package sticks there, the PLC faults, stops the hub, and sends a jam alarm.', jobs: ['agi', 'rovisys'], tags: ['PE_A_Merge', 'PE_B_Merge', 'Jam_Timer_A', 'Jam_Timer_B', 'Jam_Fault'] },
+    { id: 'sorter', n: 6, name: 'Shoe sorter', lens: 'plc', pos: [23.5, 2.2, 0], what: 'The PLC tracks every package by position. When one lines up with its door, a row of shoes slides across and pushes it onto that chute. Route colors match from package to truck.', jobs: ['agi', 'rovisys', 'dura'], tags: ['Sorter_Run', 'Shoe_D1', 'Shoe_D2', 'Shoe_D3', 'Shoe_D4', 'Shoe_D5', 'Shoe_D6'] },
+    { id: 'cars', n: 7, name: 'Door scanners + package cars', lens: 'plc', pos: [19, 4.6, SPUR_Z + 2.4], what: 'Every chute ends at a door confirm scanner. It reads the label one last time. Right truck: green flash and the package loads. Wrong truck: red flash and it is held for re-sort.', jobs: ['agi', 'rovisys', 'dura'], tags: ['LoadScan_D1', 'LoadScan_D4', 'Count_D1', 'Count_D4', 'Count_WrongDoor', 'Count_Total'] },
+    { id: 'plc', n: 8, name: 'PLC cabinet', lens: 'plc', pos: [3, 3.4, -3.6], what: 'Runs the program (OpenPLC now, Allen-Bradley style tag names). Every photo-eye, scanner and shoe on this floor is a tag in here.', jobs: ['agi', 'rovisys', 'dura'], tags: ['System_Run', 'Jam_Fault', 'Count_Total', 'Pkg_Per_Hour'] },
+    { id: 'gw', n: 9, name: 'Edge gateway', lens: 'both', pos: [6.6, 2.8, -3.6], what: 'A small Linux box running Python in Docker. It reads PLC tags over Modbus TCP every second and publishes them to AWS over MQTT. If the internet drops, it buffers and sends everything later.', jobs: ['dura', 'fab2', 'rovisys', 'samba'], tags: ['Gateway_Online', 'Gateway_Backlog', 'Gateway_Sent'] },
+    { id: 'aws', n: 10, name: 'AWS cloud', lens: 'cloud', pos: [6.6, 13.6, -3.6], what: 'IoT Core receives MQTT over TLS, Lambda checks it, DynamoDB stores it, Grafana shows it, Telegram gets the alarms. All built with Terraform, so one command rebuilds it.', jobs: ['samba', 'goodwill', 'brite', 'fab2'], tags: ['Gateway_Sent', 'Pkg_Per_Hour', 'Count_Stale', 'Count_WrongDoor'] },
+    { id: 'exc', n: 11, name: 'Relabel loop', lens: 'plc', pos: [STATION_X, 2.9, -(REL_Z + 1.1)], what: 'Old labels and no-reads ride to a relabel station. A worker hand-scans the package, prints a fresh label, and sets it on the return belt. It slides back onto its own line before the scale, so the tunnel checks it again before it can reach a truck.', jobs: ['rovisys', 'dura', 'agi'], tags: ['Relabel_A_Busy', 'Relabel_B_Busy', 'Count_Relabeled', 'Count_Reinducted', 'Count_Stale', 'Count_NoRead'] },
+  ];
+  let openSpot = null;
+  function openInfo(sp) {
+    openSpot = sp;
+    $('iTitle').textContent = sp.name;
+    $('iKind').textContent = sp.lens === 'cloud' ? 'Cloud side' : sp.lens === 'both' ? 'Where the floor meets the cloud' : 'Plant floor · PLC side';
+    $('iWhat').textContent = sp.what;
+    $('iJobs').innerHTML = sp.jobs.map(j => `<span class="job ${JOB[j][1]}">${JOB[j][0]}</span>`).join('');
+    $('infoPane').hidden = false; $('scanPane').hidden = true; $('scanBtn').setAttribute('aria-pressed', 'false');
+    if (narrow()) setPane($('cloudBtn'), $('cloudPane'), false);
+    document.querySelectorAll('.spot').forEach(b => b.setAttribute('aria-pressed', b.dataset.id === sp.id));
+    updateInfoTags();
+  }
+  function closeInfo() { openSpot = null; $('infoPane').hidden = true; document.querySelectorAll('.spot').forEach(b => b.setAttribute('aria-pressed', 'false')); }
+  $('iClose').onclick = () => { closeInfo(); setPane($('scanBtn'), $('scanPane'), true); };
+  function updateInfoTags() {
+    if (!openSpot) return;
+    $('iTags').innerHTML = openSpot.tags.map(k => {
+      let v = T[k];
+      if (typeof v === 'boolean') v = v ? '<span class="ok">1</span>' : '0';
+      else if (typeof v === 'number') v = Number.isInteger(v) ? v : v.toFixed(1);
+      else v = v === '' ? '–' : (v === 'WRONG' ? '<span class="bad">WRONG</span>' : v === 'OK' ? '<span class="ok">OK</span>' : esc(v));
+      return `<tr><td>${k}</td><td>${v}</td></tr>`;
+    }).join('');
+  }
+  const spotsEl = $('spots');
+  SPOTS.forEach(sp => {
+    const b = document.createElement('button');
+    b.className = 'spot ' + sp.lens; b.dataset.id = sp.id; b.setAttribute('aria-pressed', 'false');
+    b.innerHTML = `<b>${sp.n}</b><span>${sp.name}</span>`;
+    b.title = sp.name;
+    b.onclick = () => (openSpot === sp ? ($('iClose').onclick()) : openInfo(sp));
+    spotsEl.appendChild(b); sp.el = b;
+  });
+  let lens = 'all';
+  document.querySelectorAll('[data-lens]').forEach(b => b.onclick = () => {
+    lens = b.dataset.lens;
+    document.querySelectorAll('[data-lens]').forEach(x => x.setAttribute('aria-pressed', x === b));
+    SPOTS.forEach(sp => sp.el.classList.toggle('dim', !(lens === 'all' || sp.lens === lens || sp.lens === 'both')));
+  });
+
+  updateHMI();
+
+  // ---------------- 3D ----------------
+  if (typeof THREE === 'undefined' || !THREE.OrbitControls) {
+    $('scene').innerHTML = '<p class="fallback">The 3D engine could not load, so only the control panel is running. Check your connection and reload the page.</p>';
+    setInterval(() => { sim.step(0.1 * speed); updateHMI(); updateInfoTags(); }, 100);
+    return;
+  }
+  try { await Promise.race([document.fonts.ready, new Promise(r => setTimeout(r, 1500))]); } catch (e) {}
+
+  const host = $('scene');
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  host.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color('#12171c');
+  scene.fog = new THREE.Fog('#12171c', 70, 150);
+  const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 400);
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; controls.maxPolarAngle = Math.PI * 0.47; controls.minDistance = 2; controls.maxDistance = 95;
+
+  scene.add(new THREE.HemisphereLight('#cfd9e6', '#2a2620', 0.6));
+  const sun = new THREE.DirectionalLight('#fff4e2', 1.1);
+  sun.position.set(-10, 34, 22); sun.castShadow = true; sun.shadow.mapSize.set(4096, 4096);
+  Object.assign(sun.shadow.camera, { left: -52, right: 52, top: 26, bottom: -26, near: 1, far: 110 });
+  sun.shadow.bias = -0.0005; scene.add(sun); scene.add(sun.target); sun.target.position.set(0, 0, 0);
+  const fillL = new THREE.DirectionalLight('#9fc0ff', 0.28); fillL.position.set(20, 12, -18); scene.add(fillL);
+
+  function canvasTex(w, h, draw, repeat) {
+    const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h);
+    const t = new THREE.CanvasTexture(c); t.encoding = THREE.sRGBEncoding; t.anisotropy = 4;
+    if (repeat) t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    return t;
+  }
+  const floorTex = canvasTex(512, 512, (g, w, h) => {
+    g.fillStyle = '#4a4f52'; g.fillRect(0, 0, w, h);
+    for (let i = 0; i < 9000; i++) { const v = 60 + Math.random() * 40; g.fillStyle = `rgba(${v},${v + 3},${v + 6},0.35)`; g.fillRect(Math.random() * w, Math.random() * h, 2, 2); }
+    g.strokeStyle = 'rgba(0,0,0,0.25)'; g.lineWidth = 2; g.strokeRect(0, 0, w, h);
+  }, true);
+  floorTex.repeat.set(30, 15);
+  const beltDraw = (g, w, h) => {
+    g.fillStyle = '#1d2124'; g.fillRect(0, 0, w, h);
+    for (let i = 0; i < 2500; i++) { g.fillStyle = `rgba(255,255,255,${Math.random() * 0.04})`; g.fillRect(Math.random() * w, Math.random() * h, 2, 1); }
+    g.strokeStyle = 'rgba(255,255,255,0.08)'; g.lineWidth = 3;
+    for (let x = 0; x < w; x += 32) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x + 12, h / 2); g.lineTo(x, h); g.stroke(); }
+  };
+  const slatDraw = (g, w, h) => {
+    const grad = g.createLinearGradient(0, 0, w, 0);
+    grad.addColorStop(0, '#aab3ba'); grad.addColorStop(0.5, '#c9d0d5'); grad.addColorStop(1, '#aab3ba');
+    g.fillStyle = grad; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#2b3136'; g.fillRect(w - 5, 0, 5, h);
+    g.fillStyle = 'rgba(255,255,255,0.35)'; g.fillRect(2, 0, 3, h);
+  };
+  function cardboard(g, w, h, tint) {
+    g.fillStyle = tint; g.fillRect(0, 0, w, h);
+    for (let i = 0; i < 1400; i++) { g.fillStyle = `rgba(80,50,20,${Math.random() * 0.08})`; g.fillRect(Math.random() * w, Math.random() * h, 3, 1); }
+  }
+  function shipLabel(g, x, y, w, h, route, color, date, seed) {
+    g.fillStyle = '#f6f4ee'; g.fillRect(x, y, w, h);
+    g.fillStyle = color; g.fillRect(x, y, w, h * 0.3);
+    g.fillStyle = '#111'; g.textBaseline = 'middle';
+    g.font = `700 ${Math.round(h * 0.25)}px "Barlow Condensed", "Arial Narrow", sans-serif`; g.fillText('RT ' + route, x + w * 0.06, y + h * 0.16);
+    g.font = `600 ${Math.round(h * 0.11)}px "IBM Plex Mono", monospace`; g.fillText(date, x + w * 0.62, y + h * 0.16);
+    g.fillRect(x + w * 0.06, y + h * 0.38, w * 0.55, h * 0.05); g.fillRect(x + w * 0.06, y + h * 0.47, w * 0.4, h * 0.05);
+    let bx = x + w * 0.06, s = seed * 9301 + 49297;
+    while (bx < x + w * 0.94) { s = (s * 9301 + 49297) % 233280; const bw = 1 + (s % 4); g.fillRect(bx, y + h * 0.6, bw, h * 0.3); bx += bw + 1 + (s % 3); }
+  }
+  const texCache = {};
+  function pkgMats(p) {
+    const d = DOORS[p.door], key = p.kind + p.variant + ':' + p.door + ':' + (p.stale ? 1 : 0);
+    if (texCache[key]) return texCache[key];
+    const tints = { box: ['#b88a57', '#c29763', '#a87c4c'], big: ['#b08250', '#a87c4c', '#bf9461'], env: ['#f1efe8', '#d9c48f', '#e4e7ea'], bag: ['#d7dbe0', '#b8c0c8', '#e8eaed'] }[p.kind];
+    const tint = tints[p.variant];
+    const side = canvasTex(128, 128, (g, w, h) => {
+      if (p.kind === 'box' || p.kind === 'big') cardboard(g, w, h, tint); else { g.fillStyle = tint; g.fillRect(0, 0, w, h); }
+      g.fillStyle = d.color; g.fillRect(0, h * 0.36, w, h * 0.28); // route tape
+    });
+    const top = canvasTex(256, 256, (g, w, h) => {
+      if (p.kind === 'box' || p.kind === 'big') cardboard(g, w, h, tint); else { g.fillStyle = tint; g.fillRect(0, 0, w, h); }
+      g.fillStyle = d.color; g.fillRect(0, h * 0.42, w, h * 0.16);
+      if (p.stale) {
+        // yesterday's label never got crossed out: two labels on one package
+        g.save(); g.translate(w * 0.62, h * 0.66); g.rotate(-0.22);
+        shipLabel(g, -w * 0.3, -h * 0.17, w * 0.6, h * 0.34, DOORS[(p.door + 2) % 6].route, '#9aa3ab', sim.YESTERDAY, p.door + 11);
+        g.restore();
+      }
+      shipLabel(g, w * 0.08, h * 0.08, w * 0.6, h * 0.34, d.route, d.color, sim.TODAY, p.door + 3);
+    });
+    const rough = p.kind === 'bag' ? 0.45 : 0.85;
+    const ms = new THREE.MeshStandardMaterial({ map: side, roughness: rough });
+    const mt = new THREE.MeshStandardMaterial({ map: top, roughness: rough });
+    texCache[key] = [ms, ms, mt, ms, ms, ms];
+    return texCache[key];
+  }
+  function signTex(lines, bg, fg, w = 512, h = 160, stripe) {
+    return canvasTex(w, h, (g) => {
+      g.fillStyle = bg; g.fillRect(0, 0, w, h);
+      if (stripe) { g.fillStyle = stripe; g.fillRect(0, 0, 22, h); }
+      g.fillStyle = fg; g.textBaseline = 'middle';
+      const x0 = stripe ? 40 : 26;
+      g.font = `700 ${Math.round(h * 0.46)}px "Barlow Condensed", "Arial Narrow", sans-serif`;
+      g.fillText(lines[0], x0, lines[1] ? h * 0.36 : h / 2);
+      if (lines[1]) { g.font = `600 ${Math.round(h * 0.24)}px "Barlow Condensed", "Arial Narrow", sans-serif`; g.globalAlpha = 0.8; g.fillText(lines[1], x0 + 2, h * 0.74); g.globalAlpha = 1; }
+    });
+  }
+  function sprite(tex, w, h, x, y, z) { const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false })); s.scale.set(w, h, 1); s.position.set(x, y, z); scene.add(s); return s; }
+
+  const M = {
+    floor: new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.92 }),
+    alu: new THREE.MeshStandardMaterial({ color: '#b9c2c9', roughness: 0.38, metalness: 0.75 }),
+    frame: new THREE.MeshStandardMaterial({ color: '#59636c', roughness: 0.55, metalness: 0.6 }),
+    leg: new THREE.MeshStandardMaterial({ color: '#3f474e', roughness: 0.6, metalness: 0.5 }),
+    motor: new THREE.MeshStandardMaterial({ color: '#2f5f8f', roughness: 0.5, metalness: 0.4 }),
+    safety: new THREE.MeshStandardMaterial({ color: '#f2b630', roughness: 0.55, metalness: 0.1 }),
+    dark: new THREE.MeshStandardMaterial({ color: '#202529', roughness: 0.7, metalness: 0.3 }),
+    roller: new THREE.MeshStandardMaterial({ color: '#c7ced4', roughness: 0.3, metalness: 0.9 }),
+    glass: new THREE.MeshStandardMaterial({ color: '#9fb6c6', roughness: 0.1, metalness: 0.2, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false }),
+    mirror: new THREE.MeshStandardMaterial({ color: '#e6f0f6', roughness: 0.04, metalness: 1.0, emissive: '#35505f', emissiveIntensity: 0.35, side: THREE.DoubleSide }),
+    lens: new THREE.MeshStandardMaterial({ color: '#0c0f12', roughness: 0.15, metalness: 0.7 }),
+    gaylord: new THREE.MeshStandardMaterial({ color: '#a8804f', roughness: 0.85, side: THREE.DoubleSide }),
+    truck: new THREE.MeshStandardMaterial({ color: '#e9ecef', roughness: 0.45, metalness: 0.15 }),
+    truckIn: new THREE.MeshStandardMaterial({ color: '#3a3f44', roughness: 0.8, side: THREE.DoubleSide }),
+    tire: new THREE.MeshStandardMaterial({ color: '#16181a', roughness: 0.9 }),
+    windshield: new THREE.MeshStandardMaterial({ color: '#28465a', roughness: 0.1, metalness: 0.6 }),
+    trailer: new THREE.MeshStandardMaterial({ color: '#c9ced3', roughness: 0.5, metalness: 0.3, side: THREE.DoubleSide }),
+    cabinet: new THREE.MeshStandardMaterial({ color: '#b5bcc2', roughness: 0.5, metalness: 0.4 }),
+  };
+  const box = (w, h, d, mat, x, y, z, parent = scene) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m); return m; };
+  const cyl = (r, l, mat, axis, x, y, z, parent = scene, seg = 18) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, l, seg), mat); if (axis === 'z') m.rotation.x = Math.PI / 2; if (axis === 'x') m.rotation.z = Math.PI / 2; m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m); return m; };
+  const glow = color => new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.15, roughness: 0.4 });
+
+  // ---------- floor + markings ----------
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(130, 64), M.floor);
+  floor.rotation.x = -Math.PI / 2; floor.position.x = 0; floor.receiveShadow = true; scene.add(floor);
+  function paint(w, d, color, x, z, rot = 0) { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshStandardMaterial({ color, roughness: 0.8 })); m.rotation.x = -Math.PI / 2; m.rotation.z = rot; m.position.set(x, 0.004, z); scene.add(m); return m; }
+  for (const z of [-2.4, 2.4]) paint(44, 0.1, '#d9a21f', 21, z);
+  for (const z of [-SPUR_Z - 0.15, SPUR_Z + 0.15]) { // dock edges, yellow/black
+    for (let x = 3; x < 35; x += 0.8) paint(0.4, 0.3, '#d9a21f', x, z); paint(32, 0.3, '#1b1d1f', 19, z).position.y = 0.003;
+  }
+  // route lane arrows on the floor beside each chute
+  DOORS.forEach(d => {
+    for (let k = 0; k < 3; k++) {
+      const z = d.side * (3.2 + k * 1.9);
+      const sh = new THREE.Shape(); sh.moveTo(-0.28, 0); sh.lineTo(0.28, 0); sh.lineTo(0.28, 0.5); sh.lineTo(0.55, 0.5); sh.lineTo(0, 1.1); sh.lineTo(-0.55, 0.5); sh.lineTo(-0.28, 0.5); sh.closePath();
+      const m = new THREE.Mesh(new THREE.ShapeGeometry(sh), new THREE.MeshStandardMaterial({ color: d.color, roughness: 0.8, transparent: true, opacity: 0.75 }));
+      m.rotation.x = -Math.PI / 2; if (d.side > 0) m.rotation.z = Math.PI;
+      m.position.set(d.x + 1.05, 0.005, z); scene.add(m);
+    }
+  });
+
+  // ---------- conveyor segments ----------
+  const belts = [];
+  function legsAlong(sg, hw, every = 1.6) {
+    const n = Math.max(2, Math.round(sg.len / every) + 1);
+    const dx = Math.cos(sg.ang), dz = Math.sin(sg.ang), nx = -dz, nz = dx;
+    for (let i = 0; i < n; i++) {
+      const f = (0.12 + (sg.len - 0.24) * (i / (n - 1))) / sg.len;
+      const x = sg.x0 + (sg.x1 - sg.x0) * f, z = sg.z0 + (sg.z1 - sg.z0) * f, y = sg.y0 + (sg.y1 - sg.y0) * f - 0.18;
+      for (const s of [-1, 1]) { const lx = x + nx * s * (hw - 0.07), lz = z + nz * s * (hw - 0.07); box(0.07, y, 0.07, M.leg, lx, y / 2, lz); box(0.17, 0.02, 0.14, M.dark, lx, 0.01, lz); }
+    }
+  }
+  function segGroup(sg) {
+    const outer = new THREE.Group(); outer.position.set((sg.x0 + sg.x1) / 2, (sg.y0 + sg.y1) / 2, (sg.z0 + sg.z1) / 2); outer.rotation.y = -sg.ang; scene.add(outer);
+    const inner = new THREE.Group(); inner.rotation.z = Math.atan2(sg.y1 - sg.y0, sg.len); outer.add(inner);
+    return inner;
+  }
+  function buildBelt(id, width, draw, tile, railColorMat) {
+    const sg = SEG[id], g = segGroup(sg), len = sg.len;
+    const tex = canvasTex(draw === slatDraw ? 64 : 256, 64, draw, true); tex.repeat.set(len / tile, 1);
+    const top = box(len, 0.04, width, new THREE.MeshStandardMaterial({ map: tex, roughness: draw === slatDraw ? 0.4 : 0.85, metalness: draw === slatDraw ? 0.6 : 0.05 }), 0, -0.02, 0, g); top.castShadow = false;
+    belts.push({ tex, tile, v: sg.v });
+    const rail = railColorMat || M.alu;
+    box(len + 0.04, 0.15, 0.05, rail, 0, 0.0, width / 2 + 0.03, g); box(len + 0.04, 0.15, 0.05, rail, 0, 0.0, -width / 2 - 0.03, g);
+    box(len, 0.13, width - 0.04, M.frame, 0, -0.13, 0, g);
+    legsAlong(sg, width / 2 + 0.03);
+    return g;
+  }
+  function buildRollers(id, width, railMat, skip = 0) {
+    const sg = SEG[id], g = segGroup(sg), len = sg.len;
+    const pitch = 0.13, n = Math.floor((len - skip) / pitch);
+    const im = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.034, 0.034, width, 12), M.roller, n);
+    const d = new THREE.Object3D();
+    for (let i = 0; i < n; i++) { d.position.set(-len / 2 + skip + 0.06 + i * pitch, -0.035, 0); d.rotation.set(Math.PI / 2, 0, 0); d.updateMatrix(); im.setMatrixAt(i, d.matrix); }
+    im.castShadow = true; im.receiveShadow = true; g.add(im);
+    const rl = len - skip;
+    box(rl, 0.16, 0.05, railMat || M.alu, skip / 2, 0.0, width / 2 + 0.03, g); box(rl, 0.16, 0.05, railMat || M.alu, skip / 2, 0.0, -width / 2 - 0.03, g);
+    box(rl, 0.06, width - 0.1, M.frame, skip / 2, -0.12, 0, g);
+    // legs along the roller part only
+    const sub = Object.assign({}, sg, { x0: sg.x0 + (sg.x1 - sg.x0) * skip / len, z0: sg.z0 + (sg.z1 - sg.z0) * skip / len, y0: sg.y0 + (sg.y1 - sg.y0) * skip / len, len: rl });
+    legsAlong(sub, width / 2 + 0.03, 1.5);
+    return g;
+  }
+  for (const L of ['A', 'B']) {
+    buildBelt('IND1_' + L, 0.9, beltDraw, 0.8);
+    buildBelt('IND2_' + L, 0.9, beltDraw, 0.8);
+    buildBelt('MRG_' + L, 0.9, beltDraw, 0.8);
+    buildRollers('EXC_' + L, 0.8, glow('#e5484d'), 0.55);
+    buildBelt('REL_' + L, 0.8, beltDraw, 0.8, glow('#e5484d'));
+    buildBelt('RET_' + L, 0.8, beltDraw, 0.8, glow('#3fbf6f'));
+  }
+  buildBelt('MAIN', 1.1, slatDraw, 0.15);
+  buildRollers('NOSORT', 0.9, null, 0);
+  const routeRail = DOORS.map(d => glow(d.color));
+  DOORS.forEach((d, i) => buildRollers('SPUR' + i, 0.78, routeRail[i], 0.65));
+  // motors + belt signs
+  for (const [L, s] of [['A', -1], ['B', 1]]) {
+    const z = s * LZ;
+    box(0.28, 0.28, 0.18, M.motor, X.TURN - 0.6, BY - 0.18, z - s * 0.62); cyl(0.12, 0.34, M.motor, 'z', X.TURN - 0.6, BY - 0.18, z - s * 0.82);
+    const st = sprite(signTex(['LINE ' + L, 'INDUCT · SCALE · TUNNEL ' + L], '#f2b630', '#1a1405'), 1.5, 0.47, -26, BY + 0.95, z - s * 0.85);
+    box(0.03, 0.75, 0.03, M.leg, -26, BY + 0.38, z - s * 0.85);
+  }
+  sprite(signTex(['SORTER S1', 'SLIDING-SHOE · 6 DOORS'], '#f2b630', '#1a1405'), 1.6, 0.5, 4.2, BY + 1.0, 0.95);
+  box(0.03, 0.8, 0.03, M.leg, 4.2, BY + 0.4, 0.95);
+
+  // ---------- feeder trailers ----------
+  for (const [L, s] of [['A', -1], ['B', 1]]) {
+    const z = s * LZ, x0 = -31, x1 = -45, fy = 0.55, hgt = 2.75, w = 2.5;
+    const g = new THREE.Group(); scene.add(g);
+    box(x0 - x1, 0.12, w, M.trailer, (x0 + x1) / 2, fy, z, g); // floor
+    box(x0 - x1, hgt, 0.05, M.trailer, (x0 + x1) / 2, fy + hgt / 2, z - w / 2, g);
+    box(x0 - x1, hgt, 0.05, M.trailer, (x0 + x1) / 2, fy + hgt / 2, z + w / 2, g);
+    box(x0 - x1, 0.05, w, M.trailer, (x0 + x1) / 2, fy + hgt, z, g);
+    box(0.05, hgt, w, M.trailer, x1, fy + hgt / 2, z, g);
+    for (const xx of [x1 + 1.2, x1 + 2.6]) for (const zz of [z - 0.9, z + 0.9]) cyl(0.45, 0.32, M.tire, 'z', xx, 0.45, zz, g);
+    // wall of freight still on the trailer
+    const rnd = (a, b) => a + Math.random() * (b - a);
+    for (let gx = x1 + 0.4; gx < -38.2; gx += 0.55) for (let gz = -1; gz <= 1; gz += 0.5) for (let gy = 0; gy < 4; gy++) {
+      if (Math.random() < 0.12) continue;
+      const bw = rnd(0.42, 0.52), bh = rnd(0.42, 0.55);
+      box(bw, bh, rnd(0.42, 0.48), new THREE.MeshStandardMaterial({ color: ['#b88a57', '#c29763', '#a87c4c'][Math.floor(Math.random() * 3)], roughness: 0.85 }), gx, fy + 0.06 + gy * 0.56 + bh / 2, z + gz, g);
+    }
+    // dock door frame
+    box(0.2, 3.6, 0.2, M.safety, x0 + 0.3, 1.8, z - 1.6); box(0.2, 3.6, 0.2, M.safety, x0 + 0.3, 1.8, z + 1.6);
+    box(0.25, 0.5, 3.4, M.dark, x0 + 0.3, 3.75, z);
+    sprite(signTex(['DOOR F' + (s < 0 ? 1 : 2), 'FEEDER · LINE ' + L], '#2a3138', '#e1e7ec'), 1.6, 0.5, x0 + 0.5, 4.4, z);
+  }
+
+  // ---------- scales + scan tunnels + label check gates ----------
+  const tunnels = {};
+  function scaleUnit(L, z, s) {
+    const [a, b] = X.SCALE, cx = (a + b) / 2;
+    box(b - a, 0.05, 0.86, new THREE.MeshStandardMaterial({ color: '#2d3d4a', roughness: 0.5, metalness: 0.5 }), cx, BY - 0.075, z);
+    const c = document.createElement('canvas'); c.width = 256; c.height = 128;
+    const tex = new THREE.CanvasTexture(c); tex.encoding = THREE.sRGBEncoding;
+    box(0.04, BY + 0.5, 0.04, M.leg, cx, (BY + 0.5) / 2, z + 0.9);
+    box(0.68, 0.37, 0.05, M.dark, cx, BY + 0.6, z + 0.87);
+    const disp = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.31), new THREE.MeshBasicMaterial({ map: tex }));
+    disp.position.set(cx, BY + 0.6, z + 0.9); scene.add(disp);
+    return { ctx: c.getContext('2d'), tex, shown: null };
+  }
+  function drawScale(u, v) {
+    const text = v ? v.toFixed(1) : '0.0';
+    if (u.shown === text) return; u.shown = text;
+    const g = u.ctx; g.fillStyle = '#0d1a12'; g.fillRect(0, 0, 256, 128);
+    g.fillStyle = '#7dffa8'; g.font = '500 22px "IBM Plex Mono", monospace'; g.textAlign = 'left'; g.fillText('SCALE  lb', 14, 30);
+    g.font = '600 56px "IBM Plex Mono", monospace'; g.textAlign = 'right'; g.fillText(text, 242, 98);
+    u.tex.needsUpdate = true;
+  }
+  function tunnel(L, z) {
+    const TC = (X.TUN[0] + X.TUN[1]) / 2, TL = X.TUN[1] - X.TUN[0], TW = 0.8, TH = BY + 1.35;
+    const housing = new THREE.MeshStandardMaterial({ color: '#8b959c', roughness: 0.5, metalness: 0.5 });
+    for (const x of [X.TUN[0], TC, X.TUN[1]]) for (const dz of [-TW, TW]) box(0.08, TH, 0.08, housing, x, TH / 2, z + dz);
+    for (const dz of [-TW, TW]) box(TL + 0.08, 0.1, 0.1, housing, TC, TH, z + dz);
+    for (const x of [X.TUN[0], X.TUN[1]]) box(0.1, 0.1, TW * 2 + 0.08, housing, x, TH, z);
+    box(TL, 0.1, 0.1, housing, TC, TH, z);
+    for (const dz of [-TW, TW]) { const p = new THREE.Mesh(new THREE.PlaneGeometry(TL, TH - 0.35), M.glass); p.position.set(TC, (TH + 0.35) / 2, z + dz); scene.add(p); }
+    const roof = new THREE.Mesh(new THREE.PlaneGeometry(TL, TW * 2), M.glass); roof.rotation.x = -Math.PI / 2; roof.position.set(TC, TH + 0.05, z); scene.add(roof);
+    for (const x of [X.TUN[0], X.TUN[1]]) box(0.06, 0.26, TW * 2, M.dark, x, TH - 0.18, z);
+    for (const dz of [-TW + 0.02, TW - 0.02]) box(TL, 0.32, 0.03, M.dark, TC, 0.42, z + dz);
+    const leds = [];
+    for (const dz of [-TW + 0.07, TW - 0.07]) for (const y of [BY + 1.05, BY + 0.35]) {
+      const m = new THREE.MeshStandardMaterial({ color: '#dfefff', emissive: '#dfefff', emissiveIntensity: 0.12, roughness: 0.3 });
+      leds.push(m); box(TL - 0.3, 0.04, 0.03, m, TC, y, z + dz);
+    }
+    function cam(x, y, zz, rx, ry) {
+      const g = new THREE.Group(); g.position.set(x, y, zz); g.rotation.set(rx, ry, 0); scene.add(g);
+      box(0.16, 0.12, 0.2, M.dark, 0, 0, 0, g);
+      const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.045, 0.06, 16), M.lens); lens.rotation.x = Math.PI / 2; lens.position.z = 0.12; g.add(lens);
+      box(0.04, 0.02, 0.02, M.safety, 0.05, 0.07, -0.06, g);
+    }
+    cam(TC, TH - 0.12, z, Math.PI / 2, 0);
+    cam(X.TUN[0] + 0.14, TH - 0.2, z, 0.75, Math.PI / 2);
+    cam(X.TUN[1] - 0.14, TH - 0.2, z, 0.75, -Math.PI / 2);
+    cam(TC - 0.55, TH - 0.12, z - TW + 0.16, Math.PI / 2, 0);
+    cam(TC + 0.55, TH - 0.12, z + TW - 0.16, Math.PI / 2, 0);
+    cam(TC, BY - 0.36, z, -Math.PI / 2, 0);
+    for (const s of [-1, 1]) {
+      const mr = new THREE.Mesh(new THREE.PlaneGeometry(TL - 0.5, 0.5), M.mirror);
+      mr.position.set(TC, BY + 0.62, z + s * (TW - 0.12)); mr.rotation.x = s * 0.62; scene.add(mr);
+    }
+    box(0.1, 0.045, 0.9, new THREE.MeshStandardMaterial({ color: '#173548', roughness: 0.05, metalness: 0.3, emissive: '#0d2a3a', emissiveIntensity: 0.6 }), TC, BY - 0.018, z);
+    const fan = new THREE.Mesh(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, TH - 0.15, 0), new THREE.Vector3(0, BY, -0.45), new THREE.Vector3(0, BY, 0.45)]), new THREE.MeshBasicMaterial({ color: '#ff3b3b', transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false }));
+    fan.position.set(X.TUN[0] + 0.45, 0, z); scene.add(fan);
+    const s = z < 0 ? -1 : 1;
+    sprite(signTex(['SCAN TUNNEL ' + L, '6-SIDED · 6 CAMERAS · MIRRORS'], '#2a3138', '#e1e7ec', 512, 160, '#f2b630'), 1.9, 0.6, TC, TH + 0.55, z);
+    tunnels[L] = { leds, fan, scale: scaleUnit(L, z, s) };
+  }
+  tunnel('A', -LZ); tunnel('B', LZ);
+  const gates = {};
+  for (const [L, s] of [['A', -1], ['B', 1]]) {
+    const z = s * LZ, x = X.GATE;
+    // pop-up wheel diverter: angled wheel rows set into the belt
+    const plate = new THREE.Group(); plate.position.set(x, BY + 0.003, z); scene.add(plate);
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) { const w = cyl(0.05, 0.03, M.dark, 'x', -0.3 + i * 0.2, 0, -0.3 + j * 0.2, plate, 10); w.rotation.y = s * 0.78; }
+    box(0.04, 1.7, 0.04, M.leg, x - 0.4, 0.85, z - s * 0.85);
+    const beacon = new THREE.MeshStandardMaterial({ color: '#3fbf6f', emissive: '#3fbf6f', emissiveIntensity: 0.6, roughness: 0.3 });
+    cyl(0.08, 0.16, beacon, 'y', x - 0.4, 1.78, z - s * 0.85);
+    sprite(signTex(['LABEL CHECK ' + L, 'OLD LABEL / NO READ → EXCEPTION'], '#2a3138', '#e1e7ec', 512, 160, '#e5484d'), 1.7, 0.53, x - 0.4, 2.25, z - s * 0.85);
+    // photo-eyes at the merge
+    const mg = SEG['MRG_' + L];
+    const ex = mg.x1 - Math.cos(mg.ang) * 0.3, ez = mg.z1 - Math.sin(mg.ang) * 0.3;
+    gates[L] = { beacon };
+    box(0.05, BY + 0.15, 0.05, M.leg, ex + 0.5, (BY + 0.15) / 2, ez - s * 0.1);
+  }
+  // exception + no-sort carts
+  function gaylord(b, label, stripe) {
+    const hx = b.hx + 0.05, hz = b.hz + 0.05, hgt = 0.95;
+    box(hx * 2, 0.08, hz * 2, M.gaylord, b.x, 0.05, b.z);
+    box(hx * 2, hgt, 0.03, M.gaylord, b.x, hgt / 2, b.z - hz); box(hx * 2, hgt, 0.03, M.gaylord, b.x, hgt / 2, b.z + hz);
+    box(0.03, hgt, hz * 2, M.gaylord, b.x - hx, hgt / 2, b.z); box(0.03, hgt, hz * 2, M.gaylord, b.x + hx, hgt / 2, b.z);
+    sprite(signTex([label[0], label[1]], '#2a3138', '#e1e7ec', 512, 160, stripe), 1.5, 0.47, b.x, 1.6, b.z);
+  }
+  // relabel stations: hand scan, print a fresh label, send it back to its own line
+  const relabel = {};
+  for (const [L, s] of [['A', -1], ['B', 1]]) {
+    const x = STATION_X, zb = s * REL_Z, zt = s * (REL_Z + 0.85), zo = s * (REL_Z + 1.55);
+    box(1.7, 0.06, 0.7, M.cabinet, x, 0.92, zt);
+    for (const dx of [-0.75, 0.75]) for (const dz of [-0.28, 0.28]) box(0.05, 0.9, 0.05, M.leg, x + dx, 0.45, zt + dz);
+    box(0.36, 0.26, 0.32, M.dark, x - 0.45, 1.08, zt); // label printer
+    box(0.3, 0.02, 0.18, new THREE.MeshStandardMaterial({ color: '#f6f4ee', roughness: 0.6 }), x - 0.45, 1.22, zt - s * 0.1);
+    box(0.5, 0.32, 0.03, M.dark, x + 0.4, 1.3, zt + s * 0.2); // screen
+    const scr = new THREE.MeshStandardMaterial({ color: '#173548', emissive: '#2a6f9a', emissiveIntensity: 0.6, roughness: 0.2 });
+    box(0.46, 0.28, 0.01, scr, x + 0.4, 1.3, zt + s * 0.18);
+    box(0.04, 0.22, 0.04, M.leg, x + 0.4, 1.06, zt + s * 0.2);
+    // operator in a hi-vis vest, facing the belt
+    const op = new THREE.Group(); op.position.set(x + 0.1, 0, zo); scene.add(op);
+    cyl(0.11, 0.85, new THREE.MeshStandardMaterial({ color: '#2b3540', roughness: 0.8 }), 'y', -0.1, 0.43, 0, op);
+    cyl(0.11, 0.85, new THREE.MeshStandardMaterial({ color: '#2b3540', roughness: 0.8 }), 'y', 0.1, 0.43, 0, op);
+    cyl(0.24, 0.66, new THREE.MeshStandardMaterial({ color: '#d7f23a', roughness: 0.6 }), 'y', 0, 1.18, 0, op);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.14, 16, 12), new THREE.MeshStandardMaterial({ color: '#8a5a3c', roughness: 0.7 })); head.position.set(0, 1.66, 0); head.castShadow = true; op.add(head);
+    const arm = cyl(0.06, 0.55, new THREE.MeshStandardMaterial({ color: '#d7f23a', roughness: 0.6 }), 'y', 0.24, 1.2, -s * 0.18, op); arm.rotation.x = -s * 0.9;
+    const beaconR = new THREE.MeshStandardMaterial({ color: '#f2b630', emissive: '#f2b630', emissiveIntensity: 0.05, roughness: 0.3 });
+    box(0.04, 1.6, 0.04, M.leg, x + 0.95, 0.8, zt + s * 0.3); cyl(0.08, 0.16, beaconR, 'y', x + 0.95, 1.68, zt + s * 0.3);
+    sprite(signTex(['RELABEL ' + L, 'HAND SCAN · NEW LABEL · BACK TO LINE ' + L], '#2a3138', '#e1e7ec', 560, 160, '#3fbf6f'), 2.0, 0.57, x, 2.35, zt + s * 0.3);
+    relabel[L] = { beacon: beaconR, scr };
+  }
+  gaylord(BINS.NOSORT, ['NO-SORT', 'LANE FULL · RE-RUN'], '#8d9aa6');
+
+  // ---------- sorter shoes (divert animation) ----------
+  const shoeMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.09, 0.04, 0.08), new THREE.MeshStandardMaterial({ color: '#41d67e', emissive: '#1b7a42', emissiveIntensity: 0.8, roughness: 0.4 }), 120);
+  shoeMesh.count = 0; scene.add(shoeMesh);
+  const dummy = new THREE.Object3D();
+
+  // ---------- doors: confirm scanners, frames, package cars ----------
+  const doorFx = [];
+  DOORS.forEach((d, i) => {
+    const s = d.side, zEnd = s * SPUR_Z;
+    // door confirm scanner arch near the chute end
+    const zs = zEnd - s * 0.9;
+    const archMat = new THREE.MeshStandardMaterial({ color: '#59636c', roughness: 0.5, metalness: 0.5 });
+    box(0.06, SPUR_Y + 1.0, 0.06, archMat, d.x - 0.5, (SPUR_Y + 1.0) / 2, zs); box(0.06, SPUR_Y + 1.0, 0.06, archMat, d.x + 0.5, (SPUR_Y + 1.0) / 2, zs);
+    box(1.08, 0.1, 0.12, M.dark, d.x, SPUR_Y + 0.98, zs);
+    const scanLight = new THREE.MeshStandardMaterial({ color: '#3a4249', emissive: '#000', emissiveIntensity: 1, roughness: 0.3 });
+    box(0.7, 0.03, 0.08, scanLight, d.x, SPUR_Y + 0.92, zs);
+    // door frame with route-colored header
+    box(0.22, 3.8, 0.22, M.safety, d.x - 1.55, 1.9, zEnd + s * 0.3); box(0.22, 3.8, 0.22, M.safety, d.x + 1.55, 1.9, zEnd + s * 0.3);
+    box(3.3, 0.4, 0.26, M.dark, d.x, 3.9, zEnd + s * 0.3);
+    const lamp = new THREE.MeshStandardMaterial({ color: '#3a4249', emissive: '#000', emissiveIntensity: 1, roughness: 0.3 });
+    cyl(0.12, 0.12, lamp, 'y', d.x + 1.3, 4.18, zEnd + s * 0.3);
+    sprite(signTex(['DOOR ' + d.door + ' · RT ' + d.route, d.area.toUpperCase()], d.color, '#11161b', 512, 160), 2.1, 0.66, d.x, 4.55, zEnd + s * 0.3);
+    // dock leveler
+    box(1.2, 0.05, 0.8, M.frame, d.x, SPUR_Y - 0.02, zEnd + s * 0.45);
+    // package car, rear doors open to the dock
+    const g = new THREE.Group(); g.position.set(d.x, 0, zEnd + s * 0.85); if (s < 0) g.rotation.y = Math.PI; scene.add(g);
+    const fl = SPUR_Y - 0.06, bw = 2.3, bh = 2.35, bl = 4.6;
+    box(bw, 0.1, bl, M.truckIn, 0, fl, bl / 2, g);
+    box(0.06, bh, bl, M.truck, -bw / 2, fl + bh / 2, bl / 2, g); box(0.06, bh, bl, M.truck, bw / 2, fl + bh / 2, bl / 2, g);
+    box(bw + 0.06, 0.08, bl, M.truck, 0, fl + bh, bl / 2, g);
+    box(bw, bh, 0.06, M.truckIn, 0, fl + bh / 2, bl - 0.03, g);
+    box(bw - 0.08, bh - 0.06, 0.04, M.truckIn, 0, fl + bh / 2, bl - 0.08, g);
+    box(bw, 0.32, 0.12, M.truck, 0, fl + bh - 0.12, 0.02, g); // rolled-up door
+    // interior walls dark
+    const inL = box(0.02, bh - 0.1, bl - 0.1, M.truckIn, -bw / 2 + 0.04, fl + bh / 2, bl / 2, g); const inR = box(0.02, bh - 0.1, bl - 0.1, M.truckIn, bw / 2 - 0.04, fl + bh / 2, bl / 2, g);
+    // cab
+    box(bw, 1.6, 1.3, M.truck, 0, fl + 0.55, bl + 0.65, g);
+    box(bw - 0.06, 0.7, 0.04, M.windshield, 0, fl + 1.0, bl + 1.31, g);
+    box(bw + 0.04, 0.12, 0.2, M.dark, 0, fl - 0.1, bl + 1.36, g);
+    box(bw - 0.2, 0.3, bl + 1.2, M.dark, 0, 0.42, (bl + 1.2) / 2, g); // chassis
+    for (const zz of [0.9, bl + 0.6]) for (const xx of [-bw / 2 + 0.25, bw / 2 - 0.25]) cyl(0.42, 0.3, M.tire, 'x', xx, 0.42, zz, g);
+    // side panels: route stripe + number (same color as the package tape)
+    const sideTex = canvasTex(1024, 384, (c, w, h) => {
+      c.fillStyle = '#e9ecef'; c.fillRect(0, 0, w, h);
+      c.fillStyle = d.color; c.fillRect(0, h * 0.62, w, h * 0.16);
+      c.fillStyle = '#1b2026'; c.textBaseline = 'middle';
+      c.font = '700 120px "Barlow Condensed", "Arial Narrow", sans-serif'; c.fillText('RT ' + d.route, 50, h * 0.33);
+      c.font = '600 46px "Barlow Condensed", "Arial Narrow", sans-serif'; c.fillText('ATX HUBSORT · ' + d.area.toUpperCase(), 54, h * 0.9);
+    });
+    const sideMat = new THREE.MeshStandardMaterial({ map: sideTex, roughness: 0.45 });
+    for (const sx of [-1, 1]) {
+      const pl = new THREE.Mesh(new THREE.PlaneGeometry(bl - 0.3, bh - 0.4), sideMat);
+      pl.position.set(sx * (bw / 2 + 0.035), fl + bh / 2, bl / 2); pl.rotation.y = sx * Math.PI / 2; g.add(pl);
+    }
+    const roofStripe = box(bw + 0.07, 0.02, 0.5, glow(d.color), 0, fl + bh + 0.05, bl - 0.5, g);
+    // load pile inside the car
+    const pile = box(bw - 0.3, 1, bl - 0.6, new THREE.MeshStandardMaterial({ color: '#b08250', roughness: 0.9 }), 0, fl + 0.05, bl / 2 + 0.25, g);
+    pile.geometry.translate(0, 0.5, 0);
+    doorFx.push({ scanLight, lamp, pile, d });
+  });
+
+  // ---------- PLC cabinet, edge gateway, cable tray, cloud ----------
+  const PLC = { x: 3, z: -3.6 }, GW = { x: 6.6, z: -3.6 }, CLOUD = { x: 6.6, y: 12.2, z: -3.6 };
+  box(1.4, 2.1, 0.6, M.cabinet, PLC.x, 1.05, PLC.z);
+  box(1.3, 1.95, 0.02, new THREE.MeshStandardMaterial({ color: '#c4cad0', roughness: 0.45, metalness: 0.4 }), PLC.x, 1.05, PLC.z + 0.31);
+  box(0.04, 0.3, 0.04, M.dark, PLC.x + 0.5, 1.1, PLC.z + 0.34);
+  sprite(signTex(['MCP-01 · PLC', 'HUB CONTROLS'], '#2a3138', '#e1e7ec', 512, 160, '#f2b630'), 1.3, 0.4, PLC.x, 2.75, PLC.z);
+  const stack = ['#e5484d', '#f2b630', '#3fbf6f'].map((c, i) => { const m = new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.05, roughness: 0.3 }); cyl(0.07, 0.12, m, 'y', PLC.x - 0.5, 2.55 - i * 0.13, PLC.z); return m; });
+  cyl(0.02, 0.4, M.leg, 'y', PLC.x - 0.5, 2.15, PLC.z);
+  // gateway on a pedestal
+  box(0.12, 1.4, 0.12, M.leg, GW.x, 0.7, GW.z);
+  box(0.62, 0.36, 0.42, M.dark, GW.x, 1.58, GW.z);
+  const gwLed = new THREE.MeshStandardMaterial({ color: '#6cc4ff', emissive: '#6cc4ff', emissiveIntensity: 0.4, roughness: 0.3 });
+  box(0.3, 0.04, 0.02, gwLed, GW.x, 1.62, GW.z + 0.22);
+  sprite(signTex(['EDGE GATEWAY', 'PYTHON · MQTT · BUFFER'], '#2a3138', '#e1e7ec', 512, 160, '#6cc4ff'), 1.3, 0.4, GW.x, 2.15, GW.z);
+  // cable from cabinet to gateway, overhead tray along the line
+  box(GW.x - PLC.x, 0.06, 0.06, M.dark, (PLC.x + GW.x) / 2, 0.06, PLC.z);
+  box(0.06, 1.4, 0.06, M.leg, PLC.x + 0.3, 2.75, PLC.z);
+  box(48, 0.08, 0.36, new THREE.MeshStandardMaterial({ color: '#7a848c', roughness: 0.5, metalness: 0.6 }), 6, 3.45, -1.4);
+  for (let x = -17; x <= 30; x += 6) box(0.04, 3.45, 0.04, M.leg, x, 1.72, -1.6);
+  box(0.06, 0.06, 2.3, M.dark, PLC.x + 0.3, 3.45, -2.5);
+  // the cloud
+  const cloudG = new THREE.Group(); cloudG.position.set(CLOUD.x, CLOUD.y, CLOUD.z); scene.add(cloudG);
+  const cloudMat = new THREE.MeshStandardMaterial({ color: '#dff1ff', emissive: '#6cc4ff', emissiveIntensity: 0.28, roughness: 0.9, transparent: true, opacity: 0.92 });
+  [[0, 0, 0, 1.3], [1.3, -0.25, 0.1, 1.0], [-1.25, -0.3, 0, 0.95], [0.55, 0.6, -0.1, 0.9], [-0.6, 0.45, 0.2, 0.8], [2.2, -0.45, 0, 0.7], [-2.1, -0.5, -0.1, 0.65]].forEach(([x, y, z, r]) => { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 16), cloudMat); m.position.set(x, y, z); cloudG.add(m); });
+  sprite(signTex(['AWS CLOUD', 'IOT CORE · LAMBDA · DYNAMODB · TERRAFORM'], '#0e2230', '#dff1ff', 640, 160, '#6cc4ff'), 2.8, 0.7, CLOUD.x, CLOUD.y - 1.95, CLOUD.z + 0.3);
+  const beamMat = new THREE.MeshBasicMaterial({ color: '#6cc4ff', transparent: true, opacity: 0.35, depthWrite: false });
+  const beamLen = CLOUD.y - 1.2 - 1.8;
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, beamLen, 8), beamMat); beam.position.set(GW.x, 1.8 + beamLen / 2, GW.z); scene.add(beam);
+  const parts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.14, 0.14, 0.14), new THREE.MeshBasicMaterial({ color: '#bfe6ff' }), 60);
+  parts.count = 0; scene.add(parts);
+  const particles = [];
+
+  // ---------- packages ----------
+  const meshes = new Map();
+  const tagTex = DOORS.map(d => canvasTex(128, 64, (g, w, h) => {
+    g.fillStyle = d.color; g.beginPath(); g.roundRect ? g.roundRect(2, 2, w - 4, h - 4, 14) : g.rect(2, 2, w - 4, h - 4); g.fill();
+    g.fillStyle = '#11161b'; g.font = '700 42px "Barlow Condensed", "Arial Narrow", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(d.route, w / 2, h / 2 + 2);
+  }));
+  const tagExc = canvasTex(128, 64, (g, w, h) => { g.fillStyle = '#e5484d'; g.fillRect(2, 2, w - 4, h - 4); g.fillStyle = '#fff'; g.font = '700 36px "Barlow Condensed", "Arial Narrow", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('HOLD', w / 2, h / 2 + 2); });
+  const tagMats = tagTex.map(t => new THREE.SpriteMaterial({ map: t, depthWrite: false, transparent: true }));
+  const tagExcMat = new THREE.SpriteMaterial({ map: tagExc, depthWrite: false, transparent: true });
+  let showTags = true;
+  $('tagsChk').onchange = e => { showTags = e.target.checked; };
+  function meshFor(p) {
+    let m = meshes.get(p.id);
+    const k = p.stale ? 1 : 0;
+    if (m && m.userData.k !== k) { scene.remove(m); m.geometry.dispose(); meshes.delete(p.id); m = null; }
+    if (!m) {
+      m = new THREE.Mesh(new THREE.BoxGeometry(p.L, p.H, p.W), pkgMats(p));
+      m.castShadow = true; m.receiveShadow = true; m.userData.k = k;
+      const tg = new THREE.Sprite(tagMats[p.door]); tg.scale.set(0.42, 0.21, 1); tg.position.y = p.H / 2 + 0.28; m.add(tg); m.userData.tag = tg;
+      scene.add(m); meshes.set(p.id, m);
+    }
+    return m;
+  }
+
+  // ---------- cameras ----------
+  const CAMS = {
+    overview: { p: [2, 40, 44], t: [3, 0, 0] },
+    tunnels: { p: [-4, 7.5, 15], t: [-15.5, 1, 0] },
+    sorter: { p: [17, 9, 13], t: [19, 0.8, 0] },
+    cars: { p: [30, 7, 22], t: [17, 1.5, SPUR_Z] },
+    cloud: { p: [17, 9, 9], t: [5.5, 5.5, -3.6] },
+  };
+  const TOUR = ['overview', 'tunnels', 'sorter', 'cars', 'cloud'];
+  let camAnim = null, touring = false, tourIdx = 0, tourT = 0;
+  function goCam(name, instant) {
+    const c = CAMS[name];
+    if (instant) { camera.position.set(...c.p); controls.target.set(...c.t); controls.update(); return; }
+    camAnim = { p0: camera.position.clone(), t0: controls.target.clone(), p1: new THREE.Vector3(...c.p), t1: new THREE.Vector3(...c.t), f: 0 };
+  }
+  document.querySelectorAll('[data-cam]').forEach(b => b.onclick = () => {
+    document.querySelectorAll('[data-cam]').forEach(x => x.setAttribute('aria-pressed', x === b));
+    const name = b.dataset.cam;
+    touring = name === 'tour';
+    if (touring) { tourIdx = 0; tourT = 0; goCam(TOUR[0]); } else goCam(name);
+  });
+  controls.addEventListener('start', () => {
+    if (touring) { touring = false; document.querySelectorAll('[data-cam]').forEach(x => x.setAttribute('aria-pressed', 'false')); }
+    camAnim = null;
+  });
+  goCam('overview', true);
+  if (narrow()) { camera.position.set(-6, 58, 62); controls.update(); }
+
+  function resize() { const w = host.clientWidth, h = host.clientHeight; renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+  window.addEventListener('resize', resize); resize();
+
+  // ---------- events -> effects ----------
+  let evCursor = S.evBase + S.ev.length; // skip warm-up events
+  const fx = { divert: [], wrong: DOORS.map(() => -9), ok: DOORS.map(() => -9), exc: { A: -9, B: -9 }, scan: { A: -9, B: -9 }, rel: { A: -9, B: -9 } };
+  const nodeHot = {};
+  function flashNode(n, delay, amber) { setTimeout(() => { const el = document.querySelector(`.node[data-n="${n}"]`); if (!el) return; el.classList.remove('hot', 'amber'); void el.offsetWidth; el.classList.add(amber ? 'amber' : 'hot'); clearTimeout(nodeHot[n]); nodeHot[n] = setTimeout(() => el.classList.remove('hot', 'amber'), 450); }, delay); }
+  let lastFlowFlash = 0;
+  function consumeEvents() {
+    const start = Math.max(0, evCursor - S.evBase);
+    for (let i = start; i < S.ev.length; i++) {
+      const e = S.ev[i];
+      if (e.type === 'divert') fx.divert.push({ door: e.door, t: e.t });
+      else if (e.type === 'load') fx.ok[e.door] = e.t;
+      else if (e.type === 'wrong') fx.wrong[e.door] = e.t;
+      else if (e.type === 'exc') fx.exc[e.line] = e.t;
+      else if (e.type === 'scan') fx.scan[e.line] = e.t;
+      else if (e.type === 'relabel') fx.rel[e.line] = e.t;
+      else if (e.type === 'pub') {
+        const now = performance.now();
+        if (e.live) {
+          if (particles.length < 60) particles.push({ t0: now, dur: 1100 + Math.random() * 300, alarm: e.kind === 'alarm' });
+          if (now - lastFlowFlash > 220 || e.kind === 'alarm') {
+            lastFlowFlash = now;
+            flashNode('plc', 0); flashNode('gw', 80); flashNode('iot', 300); flashNode('lambda', 520); flashNode('db', 740);
+            flashNode(e.kind === 'alarm' ? 'tg' : 'dash', 950);
+          }
+        } else { flashNode('plc', 0); flashNode('gw', 80, true); }
+      }
+    }
+    evCursor = S.evBase + S.ev.length;
+  }
+
+  // ---------- frame loop ----------
+  const clock = new THREE.Clock();
+  const v3 = new THREE.Vector3();
+  let hmiAcc = 0;
+  function frame() {
+    const rdt = Math.min(0.05, clock.getDelta());
+    const dt = rdt * speed;
+    sim.step(dt);
+    consumeEvents();
+    const run = T.System_Run, now = S.time;
+    for (const b of belts) if (run) b.tex.offset.x -= b.v * dt / b.tile;
+    // tunnels, scales, gates
+    for (const L of ['A', 'B']) {
+      const tu = tunnels[L], lit = T['Tunnel_' + L + '_Lights'];
+      const flash = now - fx.scan[L] < 0.12;
+      for (const m of tu.leds) m.emissiveIntensity = flash ? 3.2 : lit ? 1.4 : 0.12;
+      tu.fan.material.opacity = lit ? 0.18 + 0.08 * Math.sin(now * 40) : 0;
+      drawScale(tu.scale, T['Scale_' + L + '_Wt']);
+      const ga = gates[L].beacon, hot = now - fx.exc[L] < 0.8;
+      ga.color.set(hot ? '#e5484d' : '#3fbf6f'); ga.emissive.set(hot ? '#e5484d' : '#3fbf6f'); ga.emissiveIntensity = hot ? 1.6 : 0.5;
+      const rl = relabel[L], done = now - fx.rel[L] < 0.6, busy = T['Relabel_' + L + '_Busy'];
+      rl.beacon.color.set(done ? '#3fbf6f' : '#f2b630'); rl.beacon.emissive.set(done ? '#3fbf6f' : '#f2b630');
+      rl.beacon.emissiveIntensity = done ? 1.8 : busy ? (Math.floor(now * 3) % 2 ? 1.4 : 0.3) : 0.05;
+      rl.scr.emissive.set(done ? '#3fbf6f' : busy ? '#c98a1a' : '#2a6f9a');
+    }
+    // shoes
+    let si = 0;
+    fx.divert = fx.divert.filter(e => now - e.t < 0.45);
+    for (const e of fx.divert) {
+      const d = DOORS[e.door], f = (now - e.t) / 0.45;
+      for (let k = 0; k < 9 && si < 120; k++) {
+        const zz = d.side * Math.max(0, Math.min(0.48, (f * 1.3 - k * 0.07) * 0.48));
+        dummy.position.set(d.x - 0.55 + k * 0.13, BY + 0.02, zz); dummy.rotation.set(0, 0, 0); dummy.updateMatrix(); shoeMesh.setMatrixAt(si++, dummy.matrix);
+      }
+    }
+    shoeMesh.count = si; shoeMesh.instanceMatrix.needsUpdate = true;
+    // doors: confirm scanners, door lamps, load piles
+    doorFx.forEach((df, i) => {
+      const okT = now - fx.ok[i], badT = now - fx.wrong[i];
+      const bad = badT < 2.4 && Math.floor(badT * 6) % 2 === 0, ok = okT < 0.35;
+      const c = bad ? '#e5484d' : ok ? '#3fbf6f' : '#000000';
+      df.scanLight.emissive.set(c); df.lamp.emissive.set(bad ? '#e5484d' : ok ? '#3fbf6f' : '#000000');
+      df.scanLight.color.set(bad ? '#e5484d' : ok ? '#3fbf6f' : '#3a4249'); df.lamp.color.set(bad ? '#e5484d' : ok ? '#3fbf6f' : '#3a4249');
+      df.pile.scale.y = 0.02 + Math.min(1, sim.fill[i] / CAR_CAP) * 1.85;
+    });
+    // stack light + gateway
+    const blink = Math.floor(performance.now() / 400) % 2 === 0;
+    stack[0].emissiveIntensity = T.Jam_Fault && blink ? 2 : 0.05;
+    stack[1].emissiveIntensity = !T.System_Run && !T.Jam_Fault ? 1.4 : 0.05;
+    stack[2].emissiveIntensity = T.System_Run ? 1.4 : 0.05;
+    const online = T.Gateway_Online;
+    gwLed.color.set(online ? '#6cc4ff' : '#f2b630'); gwLed.emissive.set(online ? '#6cc4ff' : '#f2b630');
+    gwLed.emissiveIntensity = online ? (particles.length ? 1.6 : 0.6) : (blink ? 1.5 : 0.3);
+    beamMat.opacity = online ? 0.32 : 0.06;
+    cloudMat.emissiveIntensity = online ? 0.28 + Math.min(0.4, particles.length * 0.04) : 0.08;
+    // particles up the beam
+    const tnow = performance.now();
+    let pi = 0;
+    for (let k = particles.length - 1; k >= 0; k--) {
+      const pa = particles[k], f = (tnow - pa.t0) / pa.dur;
+      if (f >= 1) { particles.splice(k, 1); continue; }
+      dummy.position.set(GW.x, 1.85 + f * beamLen, GW.z); dummy.rotation.set(f * 6, f * 4, 0); dummy.scale.setScalar(pa.alarm ? 1.6 : 1); dummy.updateMatrix(); parts.setMatrixAt(pi, dummy.matrix);
+      parts.setColorAt && parts.setColorAt(pi, new THREE.Color(pa.alarm ? '#ff6b6f' : '#bfe6ff'));
+      pi++;
+    }
+    dummy.scale.setScalar(1);
+    parts.count = pi; parts.instanceMatrix.needsUpdate = true; if (parts.instanceColor) parts.instanceColor.needsUpdate = true;
+    // packages
+    const seen = new Set();
+    for (const p of sim.pkgs) {
+      const q = sim.place(p);
+      if (!q) continue;
+      const m = meshFor(p); seen.add(p.id);
+      m.position.set(q.x, q.y, q.z); m.rotation.set(0, -q.yaw, 0);
+      const fade = q.fade || 0;
+      m.visible = !(p.state === 'load' && fade > 0.85) && !(p.state === 'pulled' && fade > 0.95);
+      const tg = m.userData.tag;
+      const held = p.hold && p.state === 'belt';
+      tg.material = held || (p.exc && p.exc !== 'FIXED') ? tagExcMat : tagMats[p.door];
+      tg.visible = showTags && (p.state === 'belt' || p.state === 'drop');
+    }
+    for (const [id, m] of meshes) if (!seen.has(id)) { scene.remove(m); m.geometry.dispose(); meshes.delete(id); }
+    // camera moves
+    if (camAnim) {
+      camAnim.f = Math.min(1, camAnim.f + rdt / 1.3);
+      const e = camAnim.f < 0.5 ? 2 * camAnim.f * camAnim.f : 1 - Math.pow(-2 * camAnim.f + 2, 2) / 2;
+      camera.position.lerpVectors(camAnim.p0, camAnim.p1, e); controls.target.lerpVectors(camAnim.t0, camAnim.t1, e);
+      if (camAnim.f >= 1) camAnim = null;
+    }
+    if (touring) { tourT += rdt; if (tourT > 7) { tourT = 0; tourIdx = (tourIdx + 1) % TOUR.length; goCam(TOUR[tourIdx]); } }
+    controls.update();
+    renderer.render(scene, camera);
+    // hotspots follow the scene
+    const w = host.clientWidth, hh = host.clientHeight;
+    for (const sp of SPOTS) {
+      v3.set(...sp.pos).project(camera);
+      const vis = v3.z < 1 && v3.x > -1.05 && v3.x < 1.05 && v3.y > -1.05 && v3.y < 1.05;
+      sp.el.style.display = vis ? '' : 'none';
+      if (vis) sp.el.style.transform = `translate(${((v3.x + 1) / 2 * w).toFixed(1)}px, ${((1 - v3.y) / 2 * hh).toFixed(1)}px) translate(-50%, -100%)`;
+    }
+    hmiAcc += rdt;
+    if (hmiAcc > 0.1) { hmiAcc = 0; updateHMI(); updateInfoTags(); }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+
+</script>
+
+</body>
+</html>
